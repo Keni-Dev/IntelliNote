@@ -1,0 +1,85 @@
+/* Google Fonts Import */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;600;700&display=swap');
+
+/* Tailwind Directives */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base Styles */
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-bg-primary text-text-primary font-sans;
+    @apply overflow-x-hidden;
+  }
+  
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Custom Glassmorphism Components */
+@layer components {
+  .glass-card {
+    @apply bg-bg-secondary/40 backdrop-blur-xl;
+    @apply border border-white/10;
+    @apply rounded-xl shadow-lg;
+    @apply transition-all duration-300;
+  }
+  
+  .glass-card:hover {
+    @apply bg-bg-secondary/50 border-white/20;
+    @apply shadow-xl shadow-primary/5;
+  }
+  
+  .glass-button {
+    @apply bg-primary/20 backdrop-blur-md;
+    @apply border border-primary/30;
+    @apply rounded-lg px-4 py-2;
+    @apply text-text-primary font-medium;
+    @apply transition-all duration-300;
+    @apply hover:bg-primary/30 hover:border-primary/50;
+    @apply active:scale-95;
+  }
+  
+  .glass-input {
+    @apply bg-bg-tertiary/50 backdrop-blur-md;
+    @apply border border-white/10;
+    @apply rounded-lg px-4 py-2;
+    @apply text-text-primary placeholder-text-muted;
+    @apply transition-all duration-300;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50;
+  }
+  
+  .glass-panel {
+    @apply bg-bg-secondary/30 backdrop-blur-2xl;
+    @apply border border-white/5;
+    @apply rounded-2xl shadow-2xl;
+  }
+}
+
+/* Custom Utility Classes */
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-r from-primary-light to-primary;
+    @apply bg-clip-text text-transparent;
+  }
+  
+  .glass-effect {
+    backdrop-filter: blur(12px) saturate(180%);
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+  }
+  
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
