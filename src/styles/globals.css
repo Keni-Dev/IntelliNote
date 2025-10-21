@@ -1,20 +1,19 @@
 /* Google Fonts Import */
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;600;700&display=swap');
 
-/* Tailwind Directives */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind CSS v4 Import */
+@import "tailwindcss";
 
 /* Base Styles */
 @layer base {
   * {
-    @apply border-border;
+    box-sizing: border-box;
   }
   
   body {
-    @apply bg-bg-primary text-text-primary font-sans;
+    @apply bg-[#0f172a] text-[#f1f5f9] font-sans;
     @apply overflow-x-hidden;
+    min-height: 100vh;
   }
   
   html {
@@ -25,38 +24,38 @@
 /* Custom Glassmorphism Components */
 @layer components {
   .glass-card {
-    @apply bg-bg-secondary/40 backdrop-blur-xl;
+    @apply bg-[#1e293b]/40 backdrop-blur-xl;
     @apply border border-white/10;
     @apply rounded-xl shadow-lg;
     @apply transition-all duration-300;
   }
   
   .glass-card:hover {
-    @apply bg-bg-secondary/50 border-white/20;
-    @apply shadow-xl shadow-primary/5;
+    @apply bg-[#1e293b]/50 border-white/20;
+    @apply shadow-xl;
   }
   
   .glass-button {
-    @apply bg-primary/20 backdrop-blur-md;
-    @apply border border-primary/30;
+    @apply bg-[#6366f1]/20 backdrop-blur-md;
+    @apply border border-[#6366f1]/30;
     @apply rounded-lg px-4 py-2;
-    @apply text-text-primary font-medium;
+    @apply text-[#f1f5f9] font-medium;
     @apply transition-all duration-300;
-    @apply hover:bg-primary/30 hover:border-primary/50;
+    @apply hover:bg-[#6366f1]/30 hover:border-[#6366f1]/50;
     @apply active:scale-95;
   }
   
   .glass-input {
-    @apply bg-bg-tertiary/50 backdrop-blur-md;
+    @apply bg-[#334155]/50 backdrop-blur-md;
     @apply border border-white/10;
     @apply rounded-lg px-4 py-2;
-    @apply text-text-primary placeholder-text-muted;
+    @apply text-[#f1f5f9] placeholder-[#94a3b8];
     @apply transition-all duration-300;
-    @apply focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50;
+    @apply focus:outline-none focus:ring-2 focus:ring-[#6366f1]/50 focus:border-[#6366f1]/50;
   }
   
   .glass-panel {
-    @apply bg-bg-secondary/30 backdrop-blur-2xl;
+    @apply bg-[#1e293b]/30 backdrop-blur-2xl;
     @apply border border-white/5;
     @apply rounded-2xl shadow-2xl;
   }
@@ -65,7 +64,7 @@
 /* Custom Utility Classes */
 @layer utilities {
   .text-gradient {
-    @apply bg-gradient-to-r from-primary-light to-primary;
+    @apply bg-gradient-to-r from-[#818cf8] to-[#6366f1];
     @apply bg-clip-text text-transparent;
   }
   
