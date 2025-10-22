@@ -1,115 +1,351 @@
-import { useParams, Link } from 'react-router-dom'
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams } from 'react-router-dom';
+import { Canvas, Navbar } from '../components/editor';
+import { useIndexedDB } from '../hooks/useIndexedDB';
 
 function Editor() {
-  const { notebookId, noteId } = useParams()
+  const { notebookId, noteId } = useParams();
+  const { getNote, updateNote } = useIndexedDB();
+  
+  const [note, setNote] = useState(null);
+  const [noteTitle, setNoteTitle] = useState('');
+  const [saveStatus, setSaveStatus] = useState('saved');
+  const [isLoading, setIsLoading] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  
+  const lastSavedCanvasDataRef = useRef(null);
+  const latestCanvasDataRef = useRef(null);
+  const saveTimeoutRef = useRef(null);
+  const debounceSaveRef = useRef(null);
+  const canvasRef = useRef(null); // Reference to canvas methods
+  const saveInFlightRef = useRef(false);
+  const pendingFlushRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const drawingInProgressRef = useRef(false);
+
+  const SAVE_DEBOUNCE_MS = 1500;
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Fetch note data on mount
+  useEffect(() => {
+    const fetchNote = async () => {
+      try {
+        setIsLoading(true);
+        const fetchedNote = await getNote(Number(noteId));
+        
+        if (fetchedNote) {
+          setNote(fetchedNote);
+          setNoteTitle(fetchedNote.title);
+          const initialCanvasData = fetchedNote.canvasData || null;
+          lastSavedCanvasDataRef.current = initialCanvasData;
+          latestCanvasDataRef.current = initialCanvasData;
+          
+          // Extract zoom level if available
+          if (fetchedNote.canvasData) {
+            try {
+              const parsedData = JSON.parse(fetchedNote.canvasData);
+              if (parsedData.zoom) {
+                setZoom(parsedData.zoom);
+              }
+            } catch (error) {
+              console.error('Error parsing canvas data for zoom:', error);
+            }
+          }
+        } else {
+          console.error('Note not found');
+        }
+      } catch (error) {
+        console.error('Error fetching note:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    if (noteId) {
+      fetchNote();
+    }
+  }, [noteId, getNote]);
+
+  const flushPendingSaves = useCallback(async ({ immediate = false, suppressStatus = false } = {}) => {
+    if (!note) {
+      return;
+    }
+
+    const latestData = latestCanvasDataRef.current;
+    if (latestData === null || latestData === undefined) {
+      return;
+    }
+
+    if (debounceSaveRef.current) {
+      clearTimeout(debounceSaveRef.current);
+      debounceSaveRef.current = null;
+    }
+
+    if (!immediate && drawingInProgressRef.current) {
+      pendingFlushRef.current = true;
+      return;
+    }
+
+    if (saveInFlightRef.current) {
+      pendingFlushRef.current = true;
+      return;
+    }
+
+    if (latestData === lastSavedCanvasDataRef.current) {
+      return;
+    }
+
+    const dataToSave = latestData;
+    saveInFlightRef.current = true;
+    pendingFlushRef.current = false;
+
+    if (!suppressStatus && isMountedRef.current) {
+      setSaveStatus('saving');
+    }
+
+    try {
+      await updateNote(note.id, {
+        ...note,
+        canvasData: dataToSave,
+        updatedAt: new Date(),
+      });
+
+      lastSavedCanvasDataRef.current = dataToSave;
+
+      if (!suppressStatus && isMountedRef.current) {
+        setNote((prev) => (prev ? { ...prev, canvasData: dataToSave, updatedAt: new Date() } : prev));
+
+        if (latestCanvasDataRef.current === dataToSave) {
+          setSaveStatus('saved');
+
+          if (saveTimeoutRef.current) {
+            clearTimeout(saveTimeoutRef.current);
+          }
+          saveTimeoutRef.current = setTimeout(() => {
+            if (isMountedRef.current) {
+              setSaveStatus('saved');
+            }
+          }, 2000);
+        } else {
+          setSaveStatus('unsaved');
+        }
+      }
+    } catch (error) {
+      console.error('Error saving canvas:', error);
+      if (!suppressStatus && isMountedRef.current) {
+        setSaveStatus('error');
+      }
+    } finally {
+      saveInFlightRef.current = false;
+
+      if (latestCanvasDataRef.current !== lastSavedCanvasDataRef.current) {
+        if (immediate) {
+          setTimeout(() => {
+            flushPendingSaves({ immediate: true, suppressStatus }).catch(() => {});
+          }, 0);
+        } else if (pendingFlushRef.current) {
+          pendingFlushRef.current = false;
+          setTimeout(() => {
+            flushPendingSaves({ immediate: true, suppressStatus }).catch(() => {});
+          }, 0);
+        }
+      }
+    }
+  }, [note, updateNote]);
+
+  const scheduleSave = useCallback(() => {
+    if (debounceSaveRef.current) {
+      clearTimeout(debounceSaveRef.current);
+    }
+
+    if (drawingInProgressRef.current) {
+      pendingFlushRef.current = true;
+      debounceSaveRef.current = null;
+      return;
+    }
+
+    debounceSaveRef.current = setTimeout(() => {
+      flushPendingSaves().catch(() => {});
+    }, SAVE_DEBOUNCE_MS);
+  }, [flushPendingSaves, SAVE_DEBOUNCE_MS]);
+
+  const handleDrawingStateChange = useCallback((isDrawing) => {
+    drawingInProgressRef.current = isDrawing;
+
+    if (isDrawing) {
+      if (debounceSaveRef.current) {
+        clearTimeout(debounceSaveRef.current);
+        debounceSaveRef.current = null;
+      }
+      pendingFlushRef.current = true;
+      if (isMountedRef.current && saveStatus !== 'saving') {
+        setSaveStatus('unsaved');
+      }
+    } else {
+      if (pendingFlushRef.current) {
+        pendingFlushRef.current = false;
+        flushPendingSaves({ immediate: true }).catch(() => {});
+      } else if (
+        latestCanvasDataRef.current !== null &&
+        latestCanvasDataRef.current !== undefined &&
+        latestCanvasDataRef.current !== lastSavedCanvasDataRef.current
+      ) {
+        scheduleSave();
+      }
+    }
+  }, [flushPendingSaves, scheduleSave, saveStatus]);
+
+  // Handle canvas changes
+  const handleCanvasChange = useCallback((newCanvasData) => {
+    latestCanvasDataRef.current = newCanvasData;
+    
+    // Extract and update zoom level
+    try {
+      const parsedData = JSON.parse(newCanvasData);
+      if (parsedData.zoom !== undefined) {
+        setZoom(parsedData.zoom);
+      }
+    } catch {
+      // Ignore parse errors
+    }
+    
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+
+    if (saveInFlightRef.current) {
+      pendingFlushRef.current = true;
+      if (isMountedRef.current) {
+        setSaveStatus('saving');
+      }
+    } else if (isMountedRef.current) {
+      setSaveStatus('unsaved');
+    }
+
+    scheduleSave();
+  }, [scheduleSave]);
+
+  // Handle zoom change from Navbar
+  const handleZoomChange = useCallback((newZoom) => {
+    if (canvasRef.current && canvasRef.current.setCanvasZoom) {
+      canvasRef.current.setCanvasZoom(newZoom);
+    }
+  }, []);
+
+  // Handle title change
+  const handleTitleChange = async (newTitle) => {
+    if (!note || newTitle === noteTitle) return;
+
+    try {
+      setSaveStatus('saving');
+      setNoteTitle(newTitle);
+
+      await updateNote(note.id, {
+        ...note,
+        title: newTitle,
+        updatedAt: new Date(),
+      });
+
+      setNote({ ...note, title: newTitle });
+      setSaveStatus('saved');
+    } catch (error) {
+      console.error('Error updating title:', error);
+      setSaveStatus('error');
+      // Revert title on error
+      setNoteTitle(note.title);
+    }
+  };
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      flushPendingSaves({ immediate: true, suppressStatus: true }).catch(() => {});
+
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      if (debounceSaveRef.current) {
+        clearTimeout(debounceSaveRef.current);
+      }
+    };
+  }, [flushPendingSaves]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushPendingSaves({ immediate: true, suppressStatus: true }).catch(() => {});
+      }
+    };
+
+    const handlePageHide = () => {
+      flushPendingSaves({ immediate: true, suppressStatus: true }).catch(() => {});
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handlePageHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handlePageHide);
+    };
+  }, [flushPendingSaves]);
+
+  // Show loading spinner
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-gray-600 font-medium text-lg">Loading note...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error if note not found
+  if (!note) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-white">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">Note not found</h1>
+          <p className="text-gray-600">The note you're looking for doesn't exist.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Top Navigation Bar */}
-      <div className="glass-panel border-b border-white/5">
-        <div className="px-6 py-4 flex items-center justify-between">
-          {/* Left: Breadcrumb */}
-          <div className="flex items-center gap-3 text-text-muted">
-            <Link to="/" className="hover:text-primary transition-colors">
-              Home
-            </Link>
-            <span>/</span>
-            <Link 
-              to={`/notebook/${notebookId}`} 
-              className="hover:text-primary transition-colors"
-            >
-              Notebook {notebookId}
-            </Link>
-            <span>/</span>
-            <span className="text-text-primary font-semibold">Note {noteId}</span>
-          </div>
+    <div className="fixed inset-0 flex flex-col bg-white">
+      {/* Navigation Bar */}
+      <Navbar
+        notebookId={notebookId}
+        noteTitle={noteTitle}
+        saveStatus={saveStatus}
+        onTitleChange={handleTitleChange}
+        zoom={zoom}
+        onZoomChange={handleZoomChange}
+      />
 
-          {/* Right: Action Buttons */}
-          <div className="flex items-center gap-3">
-            <button className="glass-button text-sm">
-              Save
-            </button>
-            <button className="glass-button text-sm">
-              Export
-            </button>
-            <Link to={`/notebook/${notebookId}`} className="glass-button text-sm">
-              Close
-            </Link>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Editor Area */}
-      <div className="flex-1 p-6">
-        <div className="max-w-7xl mx-auto h-full">
-          <div className="glass-card p-8 h-full flex flex-col">
-            {/* Editor Header */}
-            <div className="mb-6">
-              <h1 className="text-4xl font-bold text-gradient mb-2">
-                Editor
-              </h1>
-              <p className="text-text-secondary">
-                Canvas Editor for Note {noteId} in Notebook {notebookId}
-              </p>
-            </div>
-
-            {/* Toolbar */}
-            <div className="glass-panel p-4 mb-6 flex items-center gap-3">
-              <button className="glass-button text-sm">
-                ✏️ Pen
-              </button>
-              <button className="glass-button text-sm">
-                📐 Shapes
-              </button>
-              <button className="glass-button text-sm">
-                🎨 Colors
-              </button>
-              <button className="glass-button text-sm">
-                📝 Text
-              </button>
-              <button className="glass-button text-sm">
-                📷 Image
-              </button>
-              <button className="glass-button text-sm">
-                🧮 Math
-              </button>
-              <div className="flex-1"></div>
-              <button className="glass-button text-sm">
-                ↶ Undo
-              </button>
-              <button className="glass-button text-sm">
-                ↷ Redo
-              </button>
-            </div>
-
-            {/* Canvas Area */}
-            <div className="flex-1 bg-bg-tertiary/30 backdrop-blur-sm rounded-lg border border-white/5 flex items-center justify-center">
-              <div className="text-center">
-                <div className="text-6xl mb-4">🎨</div>
-                <h2 className="text-2xl font-semibold text-text-primary mb-2">
-                  Canvas Editor
-                </h2>
-                <p className="text-text-muted max-w-md">
-                  This is where the infinite canvas will be rendered. 
-                  Draw, write, add images, and create mind maps here.
-                </p>
-                <div className="mt-6 flex justify-center gap-4">
-                  <div className="glass-panel px-4 py-2">
-                    <span className="text-text-muted text-sm">Zoom: </span>
-                    <span className="text-text-primary font-semibold">100%</span>
-                  </div>
-                  <div className="glass-panel px-4 py-2">
-                    <span className="text-text-muted text-sm">Objects: </span>
-                    <span className="text-text-primary font-semibold">0</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Canvas Area - Full screen below navbar */}
+      <div className="flex-1 mt-16">
+        <Canvas
+          ref={canvasRef}
+          noteId={noteId}
+          initialCanvasData={note.canvasData}
+          onCanvasChange={handleCanvasChange}
+          onDrawingStateChange={handleDrawingStateChange}
+        />
       </div>
     </div>
-  )
+  );
 }
 
-export default Editor
+export default Editor;

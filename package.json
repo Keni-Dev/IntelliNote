@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -16,6 +16,7 @@
     "framer-motion": "^12.23.24",
     "katex": "^0.16.25",
     "lodash": "^4.17.21",
+    "lucide-react": "^0.546.0",
     "mathjs": "^15.0.0",
     "prop-types": "^15.8.1",
     "react": "^19.1.1",
