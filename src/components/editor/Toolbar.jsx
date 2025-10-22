@@ -36,20 +36,26 @@ const Toolbar = ({
   penSettings = {},
   onPenSettingsChange,
   getPenSettings,
+  gridSettings = {},
+  onViewSettingsChange,
 }) => {
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const [isPenSettingsOpen, setIsPenSettingsOpen] = useState(false);
   const [isBrushControlsOpen, setIsBrushControlsOpen] = useState(false);
+  const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
+  const [isShapesMenuOpen, setIsShapesMenuOpen] = useState(false);
+  const [selectedShapeTool, setSelectedShapeTool] = useState('line');
   const brushControlsRef = useRef(null);
+  const shapesMenuRef = useRef(null);
 
   const pressureEnabled = penSettings?.pressureSensitivity ?? true;
   const pressureMultiplier = penSettings?.pressureMultiplier ?? 1.0;
   const baseBrushSize = penSettings?.baseWidth ?? brushSize;
-  const minStrokeWidth = penSettings?.minWidth ?? Math.max(0.5, baseBrushSize * 0.4);
-  const maxStrokeWidth = penSettings?.maxWidth ?? Math.max(minStrokeWidth + 0.5, baseBrushSize * 2);
-  const previewStrokeWidth = pressureEnabled
-    ? Math.min(maxStrokeWidth, Math.max(minStrokeWidth, baseBrushSize * pressureMultiplier))
-    : baseBrushSize;
+  const minOpacity = penSettings?.minOpacity ?? 0.3;
+  const maxOpacity = penSettings?.maxOpacity ?? 1.0;
+  const previewOpacity = pressureEnabled
+    ? Math.min(maxOpacity, Math.max(minOpacity, 0.7 * pressureMultiplier))
+    : 1.0;
   const previewDotSize = Math.max(6, Math.min(42, brushSize * 1.2));
   const livePenInfo = getPenSettings ? getPenSettings() : null;
 
@@ -73,8 +79,6 @@ const Toolbar = ({
 
     pushPenSettings({
       baseWidth: clamped,
-      minWidth: Math.max(0.5, clamped * 0.4),
-      maxWidth: Math.max(Math.max(0.5, clamped * 0.4) + 0.5, clamped * 2),
     });
   };
 
@@ -118,20 +122,22 @@ const Toolbar = ({
 
       const pressure = e.pressure ?? 0.5;
 
-      let width = baseBrushSize;
+      let opacity = 1.0;
       if (pressureEnabled) {
-        const dynamicWidth = baseBrushSize * pressure * pressureMultiplier;
-        width = Math.max(minStrokeWidth, Math.min(maxStrokeWidth, dynamicWidth));
+        const dynamicOpacity = pressure * pressureMultiplier;
+        opacity = Math.max(minOpacity, Math.min(maxOpacity, dynamicOpacity));
       }
 
       ctx.beginPath();
       ctx.moveTo(lastX, lastY);
       ctx.lineTo(x, y);
       ctx.strokeStyle = color;
-      ctx.lineWidth = width;
+      ctx.globalAlpha = opacity;
+      ctx.lineWidth = baseBrushSize;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.stroke();
+      ctx.globalAlpha = 1.0;
 
       lastX = x;
       lastY = y;
@@ -158,7 +164,40 @@ const Toolbar = ({
       canvas.removeEventListener('pointerout', stopDrawing);
       canvas.removeEventListener('dblclick', clearCanvas);
     };
-  }, [isPenSettingsOpen, baseBrushSize, color, pressureEnabled, pressureMultiplier, minStrokeWidth, maxStrokeWidth]);
+  }, [isPenSettingsOpen, baseBrushSize, color, pressureEnabled, pressureMultiplier, minOpacity, maxOpacity]);
+
+  const shapeTools = [
+    {
+      id: 'line',
+      name: 'Line',
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 19l14-14" />
+        </svg>
+      ),
+      shortcut: 'L',
+    },
+    {
+      id: 'rectangle',
+      name: 'Rectangle',
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <rect x="4" y="4" width="16" height="16" strokeWidth={2} rx="2" />
+        </svg>
+      ),
+      shortcut: 'R',
+    },
+    {
+      id: 'circle',
+      name: 'Circle',
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <circle cx="12" cy="12" r="8" strokeWidth={2} />
+        </svg>
+      ),
+      shortcut: 'C',
+    },
+  ];
 
   const tools = [
     {
@@ -201,40 +240,11 @@ const Toolbar = ({
       ),
       shortcut: 'T',
     },
-    {
-      id: 'line',
-      name: 'Line',
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 19l14-14" />
-        </svg>
-      ),
-      shortcut: 'L',
-    },
-    {
-      id: 'rectangle',
-      name: 'Rectangle',
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <rect x="4" y="4" width="16" height="16" strokeWidth={2} rx="2" />
-        </svg>
-      ),
-      shortcut: 'R',
-    },
-    {
-      id: 'circle',
-      name: 'Circle',
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <circle cx="12" cy="12" r="8" strokeWidth={2} />
-        </svg>
-      ),
-      shortcut: 'C',
-    },
   ];
 
   const showBrushSize = activeTool === 'pen' || activeTool === 'eraser';
   const showColorPicker = activeTool === 'pen' || activeTool === 'text' || activeTool === 'line' || activeTool === 'rectangle' || activeTool === 'circle';
+  const currentShapeTool = shapeTools.find(tool => tool.id === selectedShapeTool) || shapeTools[0];
 
   useEffect(() => {
     if (!showBrushSize) {
@@ -257,13 +267,36 @@ const Toolbar = ({
     };
   }, [isBrushControlsOpen]);
 
+  useEffect(() => {
+    if (!isShapesMenuOpen) return;
+
+    const handleClickOutside = (event) => {
+      // Close shapes menu when clicking outside
+      if (shapesMenuRef.current && !shapesMenuRef.current.contains(event.target)) {
+        setIsShapesMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('pointerdown', handleClickOutside);
+    return () => {
+      window.removeEventListener('pointerdown', handleClickOutside);
+    };
+  }, [isShapesMenuOpen]);
+
+  // Update selected shape tool when activeTool changes to a shape
+  useEffect(() => {
+    if (['line', 'rectangle', 'circle'].includes(activeTool)) {
+      setSelectedShapeTool(activeTool);
+    }
+  }, [activeTool]);
+
   return (
     <div
       className={cn(
         'fixed left-6 top-1/2 -translate-y-1/2',
         'backdrop-blur-md bg-gray-800/90 border border-gray-700',
         'rounded-2xl p-3 shadow-2xl',
-        'z-40',
+        'z-[60]',
         'flex flex-col gap-2'
       )}
     >
@@ -371,6 +404,103 @@ const Toolbar = ({
             </div>
           </button>
         ))}
+
+        {/* Shape Tools Button (Grouped) */}
+        <div className="relative" ref={shapesMenuRef}>
+          <button
+            onClick={() => {
+              const isShapeActive = ['line', 'rectangle', 'circle'].includes(activeTool);
+              if (isShapeActive) {
+                setIsShapesMenuOpen(!isShapesMenuOpen);
+              } else {
+                onToolChange(selectedShapeTool);
+              }
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setIsShapesMenuOpen(!isShapesMenuOpen);
+            }}
+            className={cn(
+              'relative group',
+              'w-12 h-12 rounded-xl',
+              'flex items-center justify-center',
+              'transition-all duration-200',
+              'hover:scale-105',
+              ['line', 'rectangle', 'circle'].includes(activeTool)
+                ? 'bg-indigo-500 border-2 border-indigo-400 text-white shadow-lg'
+                : 'bg-gray-700/50 border border-gray-600/50 text-gray-300 hover:bg-gray-600/50 hover:text-white'
+            )}
+            title={`${currentShapeTool.name} (${currentShapeTool.shortcut}) - Right-click for more`}
+          >
+            <div className="relative">
+              {currentShapeTool.icon}
+              {/* Small indicator for grouped tools */}
+              <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-indigo-400 rounded-sm border border-gray-800" />
+            </div>
+            
+            {/* Tooltip */}
+            <div className={cn(
+              'absolute left-full ml-2 px-3 py-1.5',
+              'bg-gray-900 text-white text-xs rounded-lg',
+              'whitespace-nowrap',
+              'opacity-0 group-hover:opacity-100',
+              'transition-opacity duration-200',
+              'pointer-events-none'
+            )}>
+              {currentShapeTool.name}
+              <span className="text-gray-400 ml-2">({currentShapeTool.shortcut})</span>
+              <div className="text-gray-500 text-[10px] mt-0.5">Right-click for more shapes</div>
+            </div>
+          </button>
+
+          {/* Shape Tools Submenu */}
+          {isShapesMenuOpen && (
+            <div className={cn(
+              'absolute left-full ml-2 top-0',
+              'backdrop-blur-md bg-gray-800/95 border border-gray-700',
+              'rounded-xl p-2 shadow-2xl',
+              'flex flex-col gap-1',
+              'z-[70]'
+            )}>
+              {shapeTools.map((tool) => (
+                <button
+                  key={tool.id}
+                  onClick={() => {
+                    onToolChange(tool.id);
+                    setSelectedShapeTool(tool.id);
+                    setIsShapesMenuOpen(false);
+                  }}
+                  className={cn(
+                    'relative group',
+                    'w-12 h-12 rounded-lg',
+                    'flex items-center justify-center',
+                    'transition-all duration-200',
+                    'hover:scale-105',
+                    activeTool === tool.id
+                      ? 'bg-indigo-500 border-2 border-indigo-400 text-white shadow-lg'
+                      : 'bg-gray-700/50 border border-gray-600/50 text-gray-300 hover:bg-gray-600/50 hover:text-white'
+                  )}
+                  title={`${tool.name} (${tool.shortcut})`}
+                >
+                  {tool.icon}
+                  
+                  {/* Tooltip */}
+                  <div className={cn(
+                    'absolute left-full ml-2 px-3 py-1.5',
+                    'bg-gray-900 text-white text-xs rounded-lg',
+                    'whitespace-nowrap',
+                    'opacity-0 group-hover:opacity-100',
+                    'transition-opacity duration-200',
+                    'pointer-events-none'
+                  )}>
+                    {tool.name}
+                    <span className="text-gray-400 ml-2">({tool.shortcut})</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Divider */}
@@ -426,11 +556,12 @@ const Toolbar = ({
 
           {isBrushControlsOpen && (
             <div className={cn(
-              'absolute left-full ml-3 top-0',
+              'absolute left-full ml-6 top-0',
               'backdrop-blur-md bg-gray-800/95 border border-gray-700',
               'rounded-2xl p-4 shadow-2xl',
-              'min-w-[320px]',
-              'z-50'
+              'min-w-[320px] max-h-[calc(100vh-8rem)]',
+              'overflow-y-auto',
+              'z-[70]'
             )}>
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-white font-semibold text-sm">Brush Size</h3>
@@ -584,11 +715,12 @@ const Toolbar = ({
           {/* Pen Settings Panel */}
           {isPenSettingsOpen && (
             <div className={cn(
-              'absolute left-full ml-3 top-0',
+              'absolute left-full ml-6 bottom-0',
               'backdrop-blur-md bg-gray-800/95 border border-gray-700',
               'rounded-2xl p-4 shadow-2xl',
-              'min-w-[280px]',
-              'z-50'
+              'min-w-[280px] max-h-[calc(100vh-8rem)]',
+              'overflow-y-auto',
+              'z-[70]'
             )}>
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-white font-semibold text-sm">Pen Settings</h3>
@@ -684,8 +816,9 @@ const Toolbar = ({
                       d="M 10 20 Q 50 10, 100 20 T 190 20"
                       stroke={color}
                       fill="none"
-                      strokeWidth={previewStrokeWidth}
+                      strokeWidth={baseBrushSize}
                       strokeLinecap="round"
+                      opacity={previewOpacity}
                     />
                   </svg>
                 </div>
@@ -731,6 +864,183 @@ const Toolbar = ({
           )}
         </div>
       )}
+
+      {/* View Settings Button (Grid & Guides) */}
+      <div className="relative">
+        <button
+          onClick={() => setIsViewSettingsOpen(!isViewSettingsOpen)}
+          className={cn(
+            'relative group',
+            'w-12 h-12 rounded-xl',
+            'flex items-center justify-center',
+            'transition-all duration-200',
+            'hover:scale-105',
+            isViewSettingsOpen
+              ? 'bg-indigo-500 border-2 border-indigo-400 text-white shadow-lg'
+              : 'bg-gray-700/50 border border-gray-600/50 text-gray-300 hover:bg-gray-600/50 hover:text-white'
+          )}
+          title="View Settings"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+          </svg>
+
+          {/* Tooltip */}
+          <div className={cn(
+            'absolute left-full ml-2 px-3 py-1.5',
+            'bg-gray-900 text-white text-xs rounded-lg',
+            'whitespace-nowrap',
+            'opacity-0 group-hover:opacity-100',
+            'transition-opacity duration-200',
+            'pointer-events-none'
+          )}>
+            View Settings
+          </div>
+        </button>
+
+        {/* View Settings Panel */}
+        {isViewSettingsOpen && (
+          <div className={cn(
+            'absolute left-full ml-6 bottom-0',
+            'backdrop-blur-md bg-gray-800/95 border border-gray-700',
+            'rounded-2xl p-4 shadow-2xl',
+            'min-w-[280px] max-h-[calc(100vh-8rem)]',
+            'overflow-y-auto',
+            'z-[70]'
+          )}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-semibold text-sm">View Settings</h3>
+              <button
+                onClick={() => setIsViewSettingsOpen(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Show Grid Toggle */}
+            <div className="mb-4">
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-xs text-gray-300 font-medium">Show Grid</span>
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    checked={gridSettings.gridEnabled}
+                    onChange={(e) => onViewSettingsChange({ gridEnabled: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className={cn(
+                    'w-10 h-5 rounded-full transition-colors',
+                    'peer-checked:bg-indigo-500 bg-gray-600'
+                  )}>
+                    <div className={cn(
+                      'absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform',
+                      'peer-checked:translate-x-5'
+                    )}></div>
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            {/* Grid Type Selector */}
+            {gridSettings.gridEnabled && (
+              <>
+                <div className="mb-4">
+                  <label className="block text-xs text-gray-300 font-medium mb-2">Grid Type</label>
+                  <select
+                    value={gridSettings.gridType}
+                    onChange={(e) => onViewSettingsChange({ gridType: e.target.value })}
+                    className={cn(
+                      'w-full px-3 py-2 rounded-lg',
+                      'bg-gray-700 text-gray-200 text-xs',
+                      'border border-gray-600',
+                      'focus:outline-none focus:ring-2 focus:ring-indigo-500',
+                      'cursor-pointer'
+                    )}
+                  >
+                    <option value="dots">Dots</option>
+                    <option value="lines">Lines</option>
+                    <option value="graph">Graph Paper</option>
+                  </select>
+                </div>
+
+                {/* Grid Size Slider */}
+                <div className="mb-4">
+                  <label className="block text-xs text-gray-300 font-medium mb-2">
+                    Grid Size: {gridSettings.gridSize}px
+                  </label>
+                  <input
+                    type="range"
+                    min="20"
+                    max="100"
+                    step="10"
+                    value={gridSettings.gridSize}
+                    onChange={(e) => onViewSettingsChange({ gridSize: Number(e.target.value) })}
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>20px</span>
+                    <span>100px</span>
+                  </div>
+                </div>
+
+                {/* Snap to Grid Toggle */}
+                <div className="mb-4">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-xs text-gray-300 font-medium">Snap to Grid</span>
+                    <div className="relative">
+                      <input
+                        type="checkbox"
+                        checked={gridSettings.snapToGrid}
+                        onChange={(e) => onViewSettingsChange({ snapToGrid: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className={cn(
+                        'w-10 h-5 rounded-full transition-colors',
+                        'peer-checked:bg-indigo-500 bg-gray-600'
+                      )}>
+                        <div className={cn(
+                          'absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform',
+                          'peer-checked:translate-x-5'
+                        )}></div>
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </>
+            )}
+
+            {/* Show Alignment Guides Toggle */}
+            <div className="mb-2">
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="text-xs text-gray-300 font-medium">Alignment Guides</span>
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    checked={gridSettings.showGuides}
+                    onChange={(e) => onViewSettingsChange({ showGuides: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className={cn(
+                    'w-10 h-5 rounded-full transition-colors',
+                    'peer-checked:bg-indigo-500 bg-gray-600'
+                  )}>
+                    <div className={cn(
+                      'absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform',
+                      'peer-checked:translate-x-5'
+                    )}></div>
+                  </div>
+                </div>
+              </label>
+              <p className="text-xs text-gray-400 mt-1">
+                Show guides when moving objects
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -749,12 +1059,20 @@ Toolbar.propTypes = {
   penSettings: PropTypes.shape({
     pressureSensitivity: PropTypes.bool,
     pressureMultiplier: PropTypes.number,
-    minWidth: PropTypes.number,
-    maxWidth: PropTypes.number,
+    minOpacity: PropTypes.number,
+    maxOpacity: PropTypes.number,
     baseWidth: PropTypes.number,
   }),
   onPenSettingsChange: PropTypes.func,
   getPenSettings: PropTypes.func,
+  gridSettings: PropTypes.shape({
+    gridEnabled: PropTypes.bool,
+    gridSize: PropTypes.number,
+    gridType: PropTypes.oneOf(['dots', 'lines', 'graph']),
+    snapToGrid: PropTypes.bool,
+    showGuides: PropTypes.bool,
+  }),
+  onViewSettingsChange: PropTypes.func,
 };
 
 export default Toolbar;

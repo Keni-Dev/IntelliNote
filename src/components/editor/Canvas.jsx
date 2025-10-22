@@ -5,6 +5,7 @@ import { useCanvas } from '../../hooks/useCanvas';
 import CanvasHistory from '../../lib/canvasHistory';
 import Toolbar from './Toolbar';
 import ZoomControls from './ZoomControls';
+import GridBackground from './GridBackground';
 
 /**
  * Canvas component using Fabric.js for drawing and editing
@@ -19,6 +20,14 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
   const [activeTool, setActiveTool] = useState('pen');
   const [brushSize, setBrushSize] = useState(2);
   const [color, setColor] = useState('#000000');
+  
+  // Grid and view state
+  const [gridEnabled, setGridEnabled] = useState(false);
+  const [gridSize, setGridSize] = useState(40);
+  const [gridType, setGridType] = useState('lines');
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [showGuides, setShowGuides] = useState(true);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   
   // History state
   const [canUndo, setCanUndo] = useState(false);
@@ -1158,8 +1167,42 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
     // Any additional canvas setup can go here
     if (canvas) {
       console.log('Canvas initialized:', noteId);
+      
+      // Update canvas size
+      const updateSize = () => {
+        if (canvas.upperCanvasEl) {
+          const rect = canvas.upperCanvasEl.getBoundingClientRect();
+          setCanvasSize({ width: rect.width, height: rect.height });
+        }
+      };
+      
+      updateSize();
+      window.addEventListener('resize', updateSize);
+      
+      return () => {
+        window.removeEventListener('resize', updateSize);
+      };
     }
   }, [canvas, noteId]);
+
+  // Handle grid and view settings changes
+  const handleViewSettingsChange = useCallback((settings) => {
+    if (settings.gridEnabled !== undefined) {
+      setGridEnabled(settings.gridEnabled);
+    }
+    if (settings.gridSize !== undefined) {
+      setGridSize(settings.gridSize);
+    }
+    if (settings.gridType !== undefined) {
+      setGridType(settings.gridType);
+    }
+    if (settings.snapToGrid !== undefined) {
+      setSnapToGrid(settings.snapToGrid);
+    }
+    if (settings.showGuides !== undefined) {
+      setShowGuides(settings.showGuides);
+    }
+  }, []);
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
@@ -1172,6 +1215,22 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
 
   return (
     <div className="relative w-full h-full bg-white">
+      {/* Grid Background */}
+      {gridEnabled && canvas && (
+        <GridBackground
+          enabled={gridEnabled}
+          gridSize={gridSize}
+          gridType={gridType}
+          zoom={zoom}
+          panOffset={{
+            x: canvas.viewportTransform[4],
+            y: canvas.viewportTransform[5]
+          }}
+          width={canvasSize.width}
+          height={canvasSize.height}
+        />
+      )}
+
       {/* Toolbar */}
       <Toolbar
         activeTool={activeTool}
@@ -1187,6 +1246,14 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
         penSettings={penSettings}
         onPenSettingsChange={updatePenSettings}
         getPenSettings={getPenSettings}
+        gridSettings={{
+          gridEnabled,
+          gridSize,
+          gridType,
+          snapToGrid,
+          showGuides,
+        }}
+        onViewSettingsChange={handleViewSettingsChange}
       />
 
       {/* Zoom Controls */}

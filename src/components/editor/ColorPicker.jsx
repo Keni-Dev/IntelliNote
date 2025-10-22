@@ -79,39 +79,40 @@ const ColorPicker = ({ selectedColor, onColorChange, isOpen, onClose }) => {
     <div
       ref={pickerRef}
       className={cn(
-        'absolute left-full ml-2 top-0',
-        'backdrop-blur-xl bg-white/10 border border-white/20',
-        'rounded-xl p-4 shadow-xl',
-        'z-50',
-        'animate-in fade-in slide-in-from-left-2 duration-200'
+        'absolute left-full ml-6 top-0',
+        'backdrop-blur-md bg-gray-800/95 border border-gray-700',
+        'rounded-2xl p-4 shadow-2xl',
+        'z-[70]',
+        'min-w-[200px]'
       )}
     >
       {/* Preset Colors */}
       <div className="mb-3">
-        <p className="text-xs text-white/70 font-medium mb-2">Preset Colors</p>
+        <p className="text-xs text-gray-300 font-medium mb-2">Preset Colors</p>
         <div className="grid grid-cols-4 gap-2">
           {presetColors.map((color) => (
             <button
               key={color}
               onClick={() => handleColorSelect(color)}
               className={cn(
-                'w-8 h-8 rounded-lg',
+                'w-10 h-10 rounded-lg',
                 'border-2 transition-all duration-200',
                 'hover:scale-110 hover:shadow-lg',
                 selectedColor === color
-                  ? 'border-white shadow-lg scale-110'
-                  : 'border-white/20 hover:border-white/40'
+                  ? 'border-indigo-400 ring-2 ring-indigo-500/50 shadow-lg scale-110'
+                  : 'border-gray-600 hover:border-gray-500'
               )}
               style={{ backgroundColor: color }}
               title={color}
+              aria-label={`Select color ${color}`}
             />
           ))}
         </div>
       </div>
 
       {/* Custom Color */}
-      <div className="mb-3">
-        <p className="text-xs text-white/70 font-medium mb-2">Custom Color</p>
+      <div className="mb-3 pb-3 border-b border-gray-700">
+        <p className="text-xs text-gray-300 font-medium mb-2">Custom Color</p>
         <div className="flex items-center gap-2">
           <input
             type="color"
@@ -119,13 +120,15 @@ const ColorPicker = ({ selectedColor, onColorChange, isOpen, onClose }) => {
             onChange={handleCustomColorChange}
             className={cn(
               'w-full h-10 rounded-lg cursor-pointer',
-              'border-2 border-white/20',
-              'bg-transparent'
+              'border-2 border-gray-600 hover:border-gray-500',
+              'bg-gray-700'
             )}
+            aria-label="Pick custom color"
           />
           <div
-            className="w-10 h-10 rounded-lg border-2 border-white/20"
+            className="w-10 h-10 rounded-lg border-2 border-gray-600 flex-shrink-0"
             style={{ backgroundColor: selectedColor }}
+            aria-label="Current color preview"
           />
         </div>
       </div>
@@ -133,8 +136,8 @@ const ColorPicker = ({ selectedColor, onColorChange, isOpen, onClose }) => {
       {/* Recent Colors */}
       {recentColors.length > 0 && (
         <div>
-          <p className="text-xs text-white/70 font-medium mb-2">Recent Colors</p>
-          <div className="flex gap-2">
+          <p className="text-xs text-gray-300 font-medium mb-2">Recent Colors</p>
+          <div className="flex gap-2 flex-wrap">
             {recentColors.map((color, index) => (
               <button
                 key={`${color}-${index}`}
@@ -144,11 +147,12 @@ const ColorPicker = ({ selectedColor, onColorChange, isOpen, onClose }) => {
                   'border-2 transition-all duration-200',
                   'hover:scale-110 hover:shadow-lg',
                   selectedColor === color
-                    ? 'border-white shadow-lg scale-110'
-                    : 'border-white/20 hover:border-white/40'
+                    ? 'border-indigo-400 ring-2 ring-indigo-500/50 shadow-lg scale-110'
+                    : 'border-gray-600 hover:border-gray-500'
                 )}
                 style={{ backgroundColor: color }}
                 title={color}
+                aria-label={`Select recent color ${color}`}
               />
             ))}
           </div>

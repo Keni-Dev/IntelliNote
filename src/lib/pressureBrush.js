@@ -9,20 +9,23 @@ export class PressureBrush extends fabric.PencilBrush {
     super(canvas);
     
     // Pressure sensitivity settings
-  this.baseWidth = Math.max(0.5, options.baseWidth ?? 4);
-  this.pressureSensitivity = options.pressureSensitivity ?? true;
-  this.pressureMultiplier = options.pressureMultiplier ?? 1.0;
-  this.minWidth = options.minWidth ?? Math.max(0.5, this.baseWidth * 0.4);
-  this.maxWidth = options.maxWidth ?? Math.max(this.minWidth + 0.5, this.baseWidth * 2);
+    this.baseWidth = Math.max(0.5, options.baseWidth ?? 4);
+    this.pressureSensitivity = options.pressureSensitivity ?? true;
+    this.pressureMultiplier = options.pressureMultiplier ?? 1.0;
+    this.minOpacity = options.minOpacity ?? 0.3;
+    this.maxOpacity = options.maxOpacity ?? 1.0;
     
-  // Internal smoothing cache for width interpolation
-  this._smoothedWidth = this.baseWidth;
+    // Internal smoothing cache for opacity interpolation
+    this._smoothedOpacity = 0.8;
     
     // Store current pressure
     this.currentPressure = 0.5;
     
     // Store pointer type
     this.pointerType = 'mouse';
+    
+    // Store base color for opacity adjustments
+    this._baseColor = this.color;
   }
 
   /**
@@ -36,11 +39,14 @@ export class PressureBrush extends fabric.PencilBrush {
     // Capture pressure and pointer type
     this._capturePointerData(options.e);
     
-    // Update width based on pressure (in canvas coordinates, not screen coordinates)
+    // Always use base width, but adjust opacity based on pressure
+    this.width = this.baseWidth;
+    
+    // Update stroke color with opacity based on pressure
     if (this.pressureSensitivity && this.currentPressure > 0) {
-      this.width = this._calculatePressureWidth(this.currentPressure);
+      this._applyPressureOpacity(this.currentPressure);
     } else {
-      this.width = this.baseWidth;
+      this.color = this._baseColor;
     }
     
     super.onMouseDown(pointer, options);
@@ -57,9 +63,12 @@ export class PressureBrush extends fabric.PencilBrush {
     // Capture pressure data
     this._capturePointerData(options.e);
     
-    // Update width based on pressure (in canvas coordinates, not screen coordinates)
+    // Always use base width, but adjust opacity based on pressure
+    this.width = this.baseWidth;
+    
+    // Update stroke color with opacity based on pressure
     if (this.pressureSensitivity && this.currentPressure > 0) {
-      this.width = this._calculatePressureWidth(this.currentPressure);
+      this._applyPressureOpacity(this.currentPressure);
     }
     
     super.onMouseMove(pointer, options);
@@ -92,23 +101,36 @@ export class PressureBrush extends fabric.PencilBrush {
   }
 
   /**
-   * Calculate brush width based on pressure
+   * Calculate and apply opacity based on pressure
    * @private
    */
-  _calculatePressureWidth(pressure) {
+  _applyPressureOpacity(pressure) {
     // Apply pressure multiplier
-  const multiplier = Math.max(0.1, this.pressureMultiplier);
-  const adjustedPressure = Math.min(1.0, pressure * multiplier);
+    const multiplier = Math.max(0.1, this.pressureMultiplier);
+    const adjustedPressure = Math.min(1.0, pressure * multiplier);
 
-  // Calculate width: interpolate between min and max based on pressure
-  const range = Math.max(0.1, this.maxWidth - this.minWidth);
-  const targetWidth = this.minWidth + (range * adjustedPressure);
+    // Calculate opacity: interpolate between min and max based on pressure
+    const range = this.maxOpacity - this.minOpacity;
+    const targetOpacity = this.minOpacity + (range * adjustedPressure);
 
-  // Smooth transitions using simple exponential moving average
-  this._smoothedWidth = (this._smoothedWidth * 0.6) + (targetWidth * 0.4);
+    // Smooth transitions using simple exponential moving average
+    this._smoothedOpacity = (this._smoothedOpacity * 0.6) + (targetOpacity * 0.4);
 
-  const clamped = Math.max(this.minWidth, Math.min(this.maxWidth, this._smoothedWidth));
-  return Number.isFinite(clamped) ? clamped : this.baseWidth;
+    const opacity = Math.max(this.minOpacity, Math.min(this.maxOpacity, this._smoothedOpacity));
+    
+    // Apply opacity to color
+    const baseColor = new fabric.Color(this._baseColor);
+    baseColor.setAlpha(opacity);
+    this.color = baseColor.toRgba();
+  }
+
+  /**
+   * Calculate brush width based on pressure (legacy, now unused)
+   * @private
+   */
+  _calculatePressureWidth() {
+    // This method is kept for backward compatibility but not used
+    return this.baseWidth;
   }
 
   /**
@@ -146,20 +168,18 @@ export class PressureBrush extends fabric.PencilBrush {
     if (options.pressureMultiplier !== undefined) {
       this.pressureMultiplier = Math.max(0.1, Math.min(3.0, options.pressureMultiplier));
     }
-    if (options.minWidth !== undefined) {
-      this.minWidth = Math.max(0.1, options.minWidth);
+    if (options.minOpacity !== undefined) {
+      this.minOpacity = Math.max(0.1, Math.min(1.0, options.minOpacity));
     }
-    if (options.maxWidth !== undefined) {
-      this.maxWidth = Math.max(this.minWidth + 0.1, options.maxWidth);
+    if (options.maxOpacity !== undefined) {
+      this.maxOpacity = Math.max(this.minOpacity, Math.min(1.0, options.maxOpacity));
     }
     if (options.baseWidth !== undefined) {
       this.baseWidth = Math.max(0.5, options.baseWidth);
-      if (options.minWidth === undefined) {
-        this.minWidth = Math.max(0.5, this.baseWidth * 0.4);
-      }
-      if (options.maxWidth === undefined) {
-        this.maxWidth = Math.max(this.minWidth + 0.5, this.baseWidth * 2);
-      }
+    }
+    if (options.color !== undefined) {
+      this._baseColor = options.color;
+      this.color = options.color;
     }
   }
 
@@ -170,8 +190,8 @@ export class PressureBrush extends fabric.PencilBrush {
     return {
       pressureSensitivity: this.pressureSensitivity,
       pressureMultiplier: this.pressureMultiplier,
-      minWidth: this.minWidth,
-      maxWidth: this.maxWidth,
+      minOpacity: this.minOpacity,
+      maxOpacity: this.maxOpacity,
       baseWidth: this.baseWidth,
       pointerType: this.pointerType,
       currentPressure: this.currentPressure,

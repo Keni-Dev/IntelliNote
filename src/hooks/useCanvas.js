@@ -275,7 +275,13 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
   const setBrushProperties = (width, color) => {
     if (!canvasRef.current || !canvasRef.current.freeDrawingBrush) return;
     if (width) canvasRef.current.freeDrawingBrush.width = width;
-    if (color) canvasRef.current.freeDrawingBrush.color = color;
+    if (color) {
+      canvasRef.current.freeDrawingBrush.color = color;
+      // Update base color for PressureBrush
+      if (canvasRef.current.freeDrawingBrush._baseColor !== undefined) {
+        canvasRef.current.freeDrawingBrush._baseColor = color;
+      }
+    }
   };
 
   /**
@@ -304,12 +310,14 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
     const pressureBrush = new PressureBrush(canvasRef.current, {
       pressureSensitivity: brushPreferences.pressureSensitivity,
       pressureMultiplier: brushPreferences.pressureMultiplier,
-      minWidth: brushPreferences.minWidth,
-      maxWidth: brushPreferences.maxWidth,
+      minOpacity: brushPreferences.minOpacity ?? 0.3,
+      maxOpacity: brushPreferences.maxOpacity ?? 1.0,
       baseWidth: brushPreferences.baseWidth,
+      color: color || '#000000',
     });
     
     pressureBrush.color = color || '#000000';
+    pressureBrush._baseColor = color || '#000000';
     pressureBrush.width = brushPreferences.baseWidth;
     
     canvasRef.current.freeDrawingBrush = pressureBrush;
