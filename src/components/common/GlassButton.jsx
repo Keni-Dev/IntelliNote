@@ -45,7 +45,10 @@ const GlassButton = ({
       setRipples((prev) => prev.filter((r) => r.id !== newRipple.id));
     }, 600);
 
-    onClick?.(event);
+    // Call onClick in the next tick to avoid DOM mutation conflicts
+    if (onClick) {
+      setTimeout(() => onClick(event), 0);
+    }
   };
 
   const variantStyles = {
@@ -60,9 +63,9 @@ const GlassButton = ({
       'active:bg-gray-500/40'
     ),
     danger: cn(
-      'bg-red-500/20 border-red-400/30 text-red-100',
-      'hover:bg-red-500/30 hover:border-red-400/50',
-      'active:bg-red-500/40'
+      'bg-gradient-to-br from-rose-600/20 to-red-700/20 border-rose-400/30 text-rose-100',
+      'hover:from-rose-600/30 hover:to-red-700/30 hover:border-rose-400/50',
+      'active:from-rose-600/40 active:to-red-700/40'
     ),
   };
 
@@ -72,10 +75,12 @@ const GlassButton = ({
       disabled={disabled}
       className={cn(
         // Base styles
-        'relative overflow-hidden',
+        'relative overflow-hidden inline-flex items-center justify-center gap-2 whitespace-nowrap',
         'backdrop-blur-xl border',
         'rounded-xl px-6 py-3',
         'font-medium',
+        // Focus ring
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:ring-white/40',
         // Shadows
         'shadow-lg shadow-black/5',
         // Transitions
@@ -106,8 +111,8 @@ const GlassButton = ({
         />
       ))}
       
-      {/* Button content */}
-      <span className="relative z-10">{children}</span>
+      {/* Button content - render children directly to preserve flex layout */}
+      {children}
     </button>
   );
 };

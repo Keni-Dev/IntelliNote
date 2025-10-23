@@ -2,10 +2,15 @@ import { useEffect, useCallback, useState, useRef, forwardRef, useImperativeHand
 import PropTypes from 'prop-types';
 import * as fabric from 'fabric';
 import { useCanvas } from '../../hooks/useCanvas';
+import useMathSolver from '../../hooks/useMathSolver';
 import CanvasHistory from '../../lib/canvasHistory';
+import { buildContextFromArea } from '../../lib/spatialContext';
+// Use solver via hook to keep a single engine instance shared with the VariablePanel
 import Toolbar from './Toolbar';
-import ZoomControls from './ZoomControls';
 import GridBackground from './GridBackground';
+import { MathInput } from '../math';
+import MathSolutionDisplay from '../math/MathSolutionDisplay';
+import VariablePanel from '../math/VariablePanel';
 
 /**
  * Canvas component using Fabric.js for drawing and editing
@@ -13,18 +18,41 @@ import GridBackground from './GridBackground';
  * @param {string} initialCanvasData - Initial canvas data (JSON string)
  * @param {Function} onCanvasChange - Callback when canvas changes
  */
-const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawingStateChange }, ref) => {
+const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawingStateChange, onViewChange }, ref) => {
   const canvasId = `canvas-${noteId}`;
+  const canvasHostRef = useRef(null);
   
   // Tool state
   const [activeTool, setActiveTool] = useState('pen');
   const [brushSize, setBrushSize] = useState(2);
   const [color, setColor] = useState('#000000');
   
+  // Math input state
+  const [mathMode, setMathMode] = useState(false);
+  const [mathInputValue, setMathInputValue] = useState('');
+  const [mathInputPosition, setMathInputPosition] = useState({ x: 0, y: 0 });
+  const mathInputRef = useRef(null);
+  
+  // Math solver state
+  const [mathSolutions, setMathSolutions] = useState([]); // Array of { equation, result, position }
+  const {
+    variables,
+    formulas,
+    detectEquation,
+    solveWithContext,
+    calculateConfidence,
+    getStoredVariables,
+    setVariable,
+    defineFormula,
+    deleteVariable,
+    deleteFormula,
+    clearContext
+  } = useMathSolver(noteId);
+  
   // Grid and view state
-  const [gridEnabled, setGridEnabled] = useState(false);
+  const [gridEnabled, setGridEnabled] = useState(true);
   const [gridSize, setGridSize] = useState(40);
-  const [gridType, setGridType] = useState('lines');
+  const [gridType, setGridType] = useState('dots');
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [showGuides, setShowGuides] = useState(true);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
@@ -72,8 +100,8 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
 
 
 
-  const { 
-    canvas, 
+  const {
+    canvas,
     isLoading,
     zoom,
     enablePenTool,
@@ -81,7 +109,7 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
     enableSelectTool,
     addText,
     enableShapeTool,
-  disableShapeTool,
+    disableShapeTool,
     setCanvasZoom,
     zoomIn,
     zoomOut,
@@ -91,7 +119,19 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
     penSettings,
     updatePenSettings,
     getPenSettings,
-  } = useCanvas(canvasId, initialCanvasData, handleCanvasChange);
+  } = useCanvas({
+    canvasId,
+    initialData: initialCanvasData,
+    onCanvasChange: handleCanvasChange,
+    hostRef: canvasHostRef,
+  });
+
+  // Notify parent of zoom changes without serializing full canvas (improves perf during interactions)
+  useEffect(() => {
+    if (typeof onViewChange === 'function' && typeof zoom === 'number') {
+      onViewChange(zoom);
+    }
+  }, [zoom, onViewChange]);
 
   // Keep brush size aligned with persisted pen preferences
   useEffect(() => {
@@ -776,6 +816,301 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
     };
   }, [canvas, activeTool, color, addText]);
 
+  // Handle text editing to detect "=" for math mode
+  useEffect(() => {
+    if (!canvas) return;
+
+    const handleTextChanged = (e) => {
+      const obj = e.target;
+      if (obj && obj.type === 'i-text' && obj.text && obj.text.includes('=')) {
+        // Convert to math mode
+        const canvasRect = canvas.upperCanvasEl.getBoundingClientRect();
+        const objBounds = obj.getBoundingRect();
+        
+        setMathInputPosition({
+          x: objBounds.left - canvasRect.left,
+          y: objBounds.top - canvasRect.top
+        });
+        setMathInputValue(obj.text);
+        setMathMode(true);
+        
+        // Remove the text object
+        canvas.remove(obj);
+        canvas.requestRenderAll();
+      }
+    };
+
+    canvas.on('text:changed', handleTextChanged);
+
+    return () => {
+      canvas.off('text:changed', handleTextChanged);
+    };
+  }, [canvas]);
+
+  // Handle math input completion
+  const handleMathInputComplete = useCallback((finalValue) => {
+    if (!canvas || !finalValue) {
+      setMathMode(false);
+      return;
+    }
+
+    // Normalize calculus shorthand (d/dx(expr)) and integral symbol ∫(expr, x, a, b)
+    const normalizeCalculusInput = (input) => {
+      let s = String(input);
+      // Replace integral symbol with integrate(
+      s = s.replace(/\u222B\s*\(/g, 'integrate(');
+
+      // Handle d/dx(<expr>) → derivative(<expr>, x)
+      const ddPattern = /\bd\/d([a-zA-Z])\s*\(/g;
+      let match;
+      let result = '';
+      let lastIndex = 0;
+      while ((match = ddPattern.exec(s)) !== null) {
+        const varName = match[1];
+        const openIndex = ddPattern.lastIndex - 1; // points at '('
+        // Find matching closing parenthesis for the expression
+        let depth = 0;
+        let i = openIndex;
+        for (; i < s.length; i++) {
+          const ch = s[i];
+          if (ch === '(') depth++;
+          else if (ch === ')') {
+            depth--;
+            if (depth === 0) {
+              break;
+            }
+          }
+        }
+        if (depth !== 0) {
+          // Unbalanced parentheses, stop processing
+          continue;
+        }
+        const exprInside = s.slice(openIndex + 1, i);
+        // Append preceding text and replacement
+        result += s.slice(lastIndex, match.index) + `derivative(${exprInside}, ${varName})`;
+        lastIndex = i + 1;
+      }
+      if (lastIndex > 0) {
+        s = result + s.slice(lastIndex);
+      }
+
+      return s;
+    };
+
+    const normalized = normalizeCalculusInput(finalValue);
+
+  // Check if it's an equation or a calculus expression (even without '=')
+  const isEquation = detectEquation(normalized);
+  const isCalculusExpression = /\b(integrate|derivative|diff)\s*\(|\u222B|\bd\/d[a-zA-Z]\b/.test(normalized);
+
+    // Create a new text object with the math content
+    const text = new fabric.IText(normalized, {
+      left: mathInputPosition.x,
+      top: mathInputPosition.y,
+      fill: color,
+      fontSize: 20,
+      fontFamily: 'Roboto Mono, monospace',
+      customType: 'mathEquation' // Mark as math equation for spatial context
+    });
+
+    canvas.add(text);
+    canvas.setActiveObject(text);
+    canvas.requestRenderAll();
+
+  // If it's an equation OR a calculus expression, solve and display solution
+  if (isEquation || isCalculusExpression) {
+      // Build spatial context from nearby equations
+      const spatialContext = buildContextFromArea(
+        null,
+        canvas,
+        mathInputPosition,
+        300 // 300px radius
+      );
+      
+      // Solve with context awareness
+  const result = solveWithContext(normalized, spatialContext);
+      
+      if (result.success || result.suggestions?.length > 0) {
+        // Position solution to avoid bottom-right UI elements (zoom controls)
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        
+        // Smart positioning: place to the right, but if too close to edge, place above/below
+        let solutionX = mathInputPosition.x + 300;
+        let solutionY = mathInputPosition.y;
+        
+        // If too far right, place on the left instead
+        if (solutionX + 400 > viewportWidth - 100) {
+          solutionX = Math.max(20, mathInputPosition.x - 420);
+        }
+        
+        // If too close to bottom (zoom controls area), move up
+        if (solutionY > viewportHeight - 300) {
+          solutionY = Math.max(100, viewportHeight - 400);
+        }
+        
+        const solutionPosition = {
+          x: solutionX,
+          y: solutionY
+        };
+
+        // Calculate confidence level
+  const confidence = calculateConfidence(result, result.context);
+
+        const newSolution = {
+          id: Date.now(),
+          equation: normalized,
+          result: result.result,
+          steps: result.steps || [],
+          variables: getStoredVariables(),
+          context: result.context,
+          suggestions: result.suggestions || [],
+          confidence: confidence,
+          position: solutionPosition,
+          sourceObject: text // Reference to the equation text object
+        };
+
+        setMathSolutions(prev => [...prev, newSolution]);
+      }
+    }
+    
+    setMathMode(false);
+    setMathInputValue('');
+  }, [canvas, mathInputPosition, color, detectEquation, getStoredVariables, solveWithContext, calculateConfidence]);
+
+  // Close math input without adding
+  const handleMathInputClose = useCallback(() => {
+    setMathMode(false);
+    setMathInputValue('');
+  }, []);
+
+  // Recalculate a solution with spatial context
+  const handleRecalculateSolution = useCallback((solutionId) => {
+    setMathSolutions(prev => {
+      return prev.map(solution => {
+        if (solution.id === solutionId) {
+          // Build fresh spatial context
+          const spatialContext = solution.sourceObject ? buildContextFromArea(
+            null,
+            canvas,
+            { x: solution.sourceObject.left, y: solution.sourceObject.top },
+            300
+          ) : {};
+          
+          const result = solveWithContext(solution.equation, spatialContext);
+          const confidence = calculateConfidence(result, result.context);
+          
+          if (result.success || result.suggestions?.length > 0) {
+            return {
+              ...solution,
+              result: result.result,
+              steps: result.steps || [],
+              variables: getStoredVariables(),
+              context: result.context,
+              suggestions: result.suggestions || [],
+              confidence: confidence
+            };
+          }
+        }
+        return solution;
+      });
+    });
+  }, [canvas, getStoredVariables, solveWithContext, calculateConfidence]);
+
+  // Navigate to source object on canvas
+  const handleNavigateToSource = useCallback((contextItem) => {
+    if (!canvas || !contextItem.source) return;
+    
+    // Highlight the source object temporarily
+    const sourceObj = contextItem.source;
+    
+    // Pan to the object
+    const canvasCenter = {
+      x: canvas.width / 2,
+      y: canvas.height / 2
+    };
+    
+    const objCenter = {
+      x: sourceObj.left + (sourceObj.width || 0) / 2,
+      y: sourceObj.top + (sourceObj.height || 0) / 2
+    };
+    
+    const newVpX = canvasCenter.x - objCenter.x * canvas.getZoom();
+    const newVpY = canvasCenter.y - objCenter.y * canvas.getZoom();
+    
+    canvas.setViewportTransform([
+      canvas.getZoom(), 0, 0, 
+      canvas.getZoom(), 
+      newVpX, newVpY
+    ]);
+    
+    // Flash highlight
+    const originalFill = sourceObj.fill;
+    const originalStroke = sourceObj.stroke;
+    const originalStrokeWidth = sourceObj.strokeWidth;
+    
+    sourceObj.set({
+      stroke: '#3b82f6',
+      strokeWidth: 3,
+      fill: originalFill
+    });
+    canvas.requestRenderAll();
+    
+    // Remove highlight after 2 seconds
+    setTimeout(() => {
+      sourceObj.set({
+        fill: originalFill,
+        stroke: originalStroke,
+        strokeWidth: originalStrokeWidth
+      });
+      canvas.requestRenderAll();
+    }, 2000);
+  }, [canvas]);
+
+  // Apply a suggestion from the math engine
+  const handleApplySuggestion = useCallback((suggestion) => {
+    if (!suggestion) return;
+    
+    switch (suggestion.action) {
+      case 'define_variable':
+        // Open variable panel or prompt for value
+        if (suggestion.variable) {
+          // For now, just set a default value
+          // In a full implementation, you'd prompt the user
+          setVariable(suggestion.variable, 0);
+        }
+        break;
+        
+      case 'use_constant':
+        // Apply the suggested constant value
+        if (suggestion.variable && suggestion.value !== undefined) {
+          setVariable(suggestion.variable, suggestion.value);
+        }
+        break;
+        
+      case 'use_formula':
+      case 'use_similar_formula':
+        // Define the suggested formula
+        if (suggestion.formula) {
+          const formula = suggestion.formula;
+          defineFormula(
+            formula.result || formula.name,
+            formula.expression || formula.formula
+          );
+        }
+        break;
+        
+      case 'fix_typo':
+        // This would require editing the original equation
+        // For now, just show info
+        console.log('Typo suggestion:', suggestion);
+        break;
+        
+      default:
+        console.log('Unknown suggestion action:', suggestion.action);
+    }
+  }, [setVariable, defineFormula]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -786,6 +1121,20 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
 
       // Check if user is editing text on canvas
       if (canvas && canvas.getActiveObject() && canvas.getActiveObject().isEditing) {
+        return;
+      }
+
+      // Ctrl/Cmd + E: Insert Math Input
+      if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
+        e.preventDefault();
+        // Get canvas center or cursor position
+        const canvasRect = canvas.upperCanvasEl.getBoundingClientRect();
+        setMathInputPosition({
+          x: canvasRect.width / 2 - 200, // Center horizontally (assuming 400px width)
+          y: canvasRect.height / 2 - 100  // Center vertically
+        });
+        setMathInputValue('');
+        setMathMode(true);
         return;
       }
 
@@ -1256,15 +1605,6 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
         onViewSettingsChange={handleViewSettingsChange}
       />
 
-      {/* Zoom Controls */}
-      <ZoomControls
-        zoom={zoom}
-        onZoomIn={zoomIn}
-        onZoomOut={zoomOut}
-        onResetZoom={resetZoom}
-        onFitToWindow={fitToWindow}
-      />
-
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-75 z-10">
           <div className="flex flex-col items-center gap-3">
@@ -1273,15 +1613,105 @@ const Canvas = forwardRef(({ noteId, initialCanvasData, onCanvasChange, onDrawin
           </div>
         </div>
       )}
-      <canvas 
-        id={canvasId}
-        className="block"
+
+      {/* Math Input Overlay */}
+      {mathMode && (
+        <div
+          className="absolute z-50"
+          style={{
+            left: mathInputPosition.x,
+            top: mathInputPosition.y,
+            minWidth: '400px',
+          }}
+        >
+          <div className="p-5 bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl shadow-2xl border-2 border-blue-500/50">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-base font-bold text-white">Math Equation Editor</h3>
+              <button
+                onClick={handleMathInputClose}
+                className="text-gray-400 hover:text-white transition-colors p-1 hover:bg-gray-700 rounded"
+                title="Close (Esc)"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <MathInput
+              ref={mathInputRef}
+              value={mathInputValue}
+              onChange={setMathInputValue}
+              onEquationDetected={(val) => {
+                // Autosubmit when user ends with '='
+                if (typeof val === 'string' && /=\s*$/.test(val)) {
+                  handleMathInputComplete(val);
+                }
+              }}
+            />
+            
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => handleMathInputComplete(mathInputValue)}
+                className="flex-1 px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-500 transition-colors shadow-lg"
+              >
+                Insert Equation
+              </button>
+              <button
+                onClick={handleMathInputClose}
+                className="px-4 py-2.5 text-sm font-semibold text-gray-200 bg-gray-700 rounded-lg hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+            
+            <div className="mt-3 text-xs text-gray-400">
+              Press <kbd className="px-2 py-1 bg-gray-700 text-gray-200 rounded border border-gray-600">Ctrl+E</kbd> to open math editor
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Math Solution Displays */}
+      {mathSolutions.map(solution => (
+        <MathSolutionDisplay
+          key={solution.id}
+          equation={solution.equation}
+          result={solution.result}
+          steps={solution.steps}
+          variables={solution.variables}
+          context={solution.context}
+          suggestions={solution.suggestions}
+          confidence={solution.confidence}
+          position={solution.position}
+          onRecalculate={() => handleRecalculateSolution(solution.id)}
+          onNavigateToSource={handleNavigateToSource}
+          onApplySuggestion={handleApplySuggestion}
+          onClose={() => setMathSolutions(prev => prev.filter(s => s.id !== solution.id))}
+        />
+      ))}
+
+      {/* Variable Panel */}
+      <VariablePanel
+        variables={variables}
+        formulas={formulas}
+        onSetVariable={setVariable}
+        onDefineFormula={defineFormula}
+        onDeleteVariable={deleteVariable}
+        onDeleteFormula={deleteFormula}
+        onClearAll={clearContext}
+      />
+
+      <div
+        ref={canvasHostRef}
+        className="absolute inset-0"
         style={{
           touchAction: 'none',
-          cursor: isPanning ? 'grabbing' : 
-                  isSpacePressed ? 'grab' : 
-                  activeTool === 'select' ? 'default' : 
-                  activeTool === 'text' ? 'text' : 'crosshair',
+          cursor: isPanning ? 'grabbing'
+            : isSpacePressed ? 'grab'
+            : activeTool === 'select' ? 'default'
+            : activeTool === 'text' ? 'text'
+            : 'crosshair',
         }}
       />
     </div>
@@ -1295,12 +1725,14 @@ Canvas.propTypes = {
   initialCanvasData: PropTypes.string,
   onCanvasChange: PropTypes.func,
   onDrawingStateChange: PropTypes.func,
+  onViewChange: PropTypes.func,
 };
 
 Canvas.defaultProps = {
   initialCanvasData: null,
   onCanvasChange: null,
   onDrawingStateChange: null,
+  onViewChange: null,
 };
 
 export default Canvas;

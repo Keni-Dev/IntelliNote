@@ -11,8 +11,23 @@ import { ArrowLeft, Check, Clock, AlertCircle, ZoomIn } from 'lucide-react';
  * @param {Function} onTitleChange - Callback when title changes
  * @param {number} zoom - Current zoom level (1 = 100%)
  * @param {Function} onZoomChange - Callback when zoom changes
+ * @param {Function} onZoomIn - Callback to zoom in
+ * @param {Function} onZoomOut - Callback to zoom out
+ * @param {Function} onResetZoom - Callback to reset zoom to 100%
+ * @param {Function} onFitToWindow - Callback to fit canvas to window
  */
-const Navbar = ({ notebookId, noteTitle, saveStatus, onTitleChange, zoom, onZoomChange }) => {
+const Navbar = ({ 
+  notebookId, 
+  noteTitle, 
+  saveStatus, 
+  onTitleChange, 
+  zoom, 
+  onZoomChange,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
+  onFitToWindow
+}) => {
   const navigate = useNavigate();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState(noteTitle);
@@ -164,20 +179,77 @@ const Navbar = ({ notebookId, noteTitle, saveStatus, onTitleChange, zoom, onZoom
 
             {/* Zoom Menu */}
             {isZoomMenuOpen && (
-              <div className="absolute top-full mt-2 right-0 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[120px] z-50">
-                {zoomPresets.map((preset) => (
+              <div className="absolute top-full mt-2 right-0 bg-gray-900 rounded-lg shadow-2xl border-2 border-gray-700 p-4 min-w-[280px] z-50">
+                {/* Zoom Controls */}
+                <div className="flex items-center gap-3 mb-4">
                   <button
-                    key={preset}
-                    onClick={() => handleZoomPreset(preset)}
-                    className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors ${
-                      Math.round(zoom * 100) === preset
-                        ? 'text-blue-600 font-medium bg-blue-50'
-                        : 'text-gray-700'
-                    }`}
+                    onClick={onZoomOut}
+                    className="p-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-600 transition-colors"
+                    title="Zoom Out"
                   >
-                    {preset}%
+                    <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                    </svg>
                   </button>
-                ))}
+                  
+                  <input
+                    type="range"
+                    min="10"
+                    max="500"
+                    value={Math.round(zoom * 100)}
+                    onChange={(e) => onZoomChange(Number(e.target.value) / 100)}
+                    className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                  
+                  <button
+                    onClick={onZoomIn}
+                    className="p-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-600 transition-colors"
+                    title="Zoom In"
+                  >
+                    <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* Quick Actions */}
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <button
+                    onClick={onResetZoom}
+                    className="flex-1 px-3 py-2 text-sm font-semibold text-white bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg transition-colors"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    onClick={() => {
+                      onFitToWindow();
+                      setIsZoomMenuOpen(false);
+                    }}
+                    className="flex-1 px-3 py-2 text-sm font-semibold text-white bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg transition-colors"
+                  >
+                    Fit
+                  </button>
+                </div>
+
+                {/* Zoom Presets */}
+                <div className="border-t border-gray-700 pt-3">
+                  <p className="text-xs text-gray-400 font-semibold mb-2">Presets</p>
+                  <div className="grid grid-cols-5 gap-2">
+                    {zoomPresets.map((preset) => (
+                      <button
+                        key={preset}
+                        onClick={() => handleZoomPreset(preset)}
+                        className={`px-3 py-2 text-sm font-semibold rounded-lg transition-colors ${
+                          Math.round(zoom * 100) === preset
+                            ? 'text-white bg-blue-600 border-2 border-blue-400'
+                            : 'text-gray-300 bg-gray-800 border border-gray-600 hover:bg-gray-700'
+                        }`}
+                      >
+                        {preset}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -207,11 +279,19 @@ Navbar.propTypes = {
   onTitleChange: PropTypes.func.isRequired,
   zoom: PropTypes.number,
   onZoomChange: PropTypes.func,
+  onZoomIn: PropTypes.func,
+  onZoomOut: PropTypes.func,
+  onResetZoom: PropTypes.func,
+  onFitToWindow: PropTypes.func,
 };
 
 Navbar.defaultProps = {
   zoom: 1,
   onZoomChange: () => {},
+  onZoomIn: () => {},
+  onZoomOut: () => {},
+  onResetZoom: () => {},
+  onFitToWindow: () => {},
 };
 
 export default Navbar;

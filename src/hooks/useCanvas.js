@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
 import { PressureBrush, loadPenPreferences, savePenPreferences } from '../lib/pressureBrush';
+import PerfectFreehandBrush from '../lib/PerfectFreehandBrush';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
@@ -20,11 +21,13 @@ const normalizePenSettings = (settings = {}, fallback = {}) => {
 
 /**
  * Custom hook for managing Fabric.js canvas
- * @param {string} canvasId - The ID of the canvas element
- * @param {Object} initialData - Initial canvas data to load
- * @param {Function} onCanvasChange - Callback when canvas changes
+ * @param {Object} params
+ * @param {string} params.canvasId - Stable identifier for the Fabric canvas instance
+ * @param {Object} params.initialData - Initial canvas data to load
+ * @param {Function} params.onCanvasChange - Callback when canvas changes
+ * @param {React.RefObject<HTMLElement>} params.hostRef - Mount point for Fabric-managed canvas DOM
  */
-export const useCanvas = (canvasId, initialData, onCanvasChange) => {
+export const useCanvas = ({ canvasId, initialData, onCanvasChange, hostRef }) => {
   const canvasRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
   const [canvasInstance, setCanvasInstance] = useState(null);
@@ -34,21 +37,26 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
   const isInitializingRef = useRef(false);
   const mountedRef = useRef(false);
   const shapeHandlersRef = useRef({ down: null, move: null, up: null });
+  const hostElementRef = useRef(null);
+  const canvasElementRef = useRef(null);
   
   // Pen/Stylus settings
   const [penSettings, setPenSettings] = useState(() => normalizePenSettings(loadPenPreferences()));
   const pressureBrushRef = useRef(null);
 
   useEffect(() => {
-    if (!canvasId || isInitializingRef.current) return;
-    
+    const hostElement = hostRef?.current;
+    if (!canvasId || !hostElement || isInitializingRef.current) {
+      return;
+    }
+
     // Prevent double initialization in strict mode
     if (mountedRef.current) return;
     mountedRef.current = true;
 
     let isCancelled = false;
 
-    // Check if canvas already exists and dispose it
+    // Cleanup any previous Fabric instance
     if (canvasRef.current) {
       try {
         canvasRef.current.dispose();
@@ -59,37 +67,34 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
       setCanvasInstance(null);
     }
 
+    // Prepare host container
+    hostElementRef.current = hostElement;
+    hostElement.innerHTML = '';
+
+    const baseCanvas = document.createElement('canvas');
+    baseCanvas.id = canvasId;
+    baseCanvas.className = 'fabric-base-canvas';
+    baseCanvas.style.display = 'block';
+    baseCanvas.style.touchAction = 'none';
+    hostElement.appendChild(baseCanvas);
+    canvasElementRef.current = baseCanvas;
+
     // Initialize Fabric canvas
     const initCanvas = async () => {
       try {
         isInitializingRef.current = true;
         setIsLoading(true);
 
-        // Get the canvas element and check if it already has a fabric instance
-        const canvasEl = document.getElementById(canvasId);
+        const canvasEl = canvasElementRef.current;
         if (!canvasEl) {
-          console.error('Canvas element not found:', canvasId);
+          console.error('Canvas mount element not available:', canvasId);
           setIsLoading(false);
           isInitializingRef.current = false;
           return;
         }
 
-        // If the element already has a fabric instance or lingering attributes, dispose and reset
-        if (canvasEl.__fabric_instance) {
-          try {
-            canvasEl.__fabric_instance.dispose();
-          } catch {
-            // Swallow errors to avoid noise from partially initialized instances
-          }
-        }
-        if (canvasEl.hasAttribute('data-fabric')) {
-          canvasEl.removeAttribute('data-fabric');
-          canvasEl.classList.remove('lower-canvas');
-        }
-        delete canvasEl.__fabric_instance;
-
-        // Create new Fabric canvas
-        const canvas = new fabric.Canvas(canvasId, {
+        // Create new Fabric canvas using the concrete element to avoid race conditions
+        const canvas = new fabric.Canvas(canvasEl, {
           isDrawingMode: false, // Start with drawing mode off
           backgroundColor: '#ffffff',
           width: window.innerWidth,
@@ -133,30 +138,41 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
         if (initialData && typeof initialData === 'string') {
           try {
             const data = JSON.parse(initialData);
-            
+
+            // Ensure Fabric has created its contexts before loading JSON
+            canvas.requestRenderAll();
+            await new Promise((r) => requestAnimationFrame(r));
+            if (!canvas.contextContainer || !canvas.upperCanvasEl) {
+              // Force a dimensions reset to (re)initialize 2D contexts (Fabric v6 quirk)
+              canvas.setWidth(window.innerWidth);
+              canvas.setHeight(window.innerHeight - 64);
+              canvas.calcOffset();
+              canvas.requestRenderAll();
+              await new Promise((r) => requestAnimationFrame(r));
+            }
+
             // Extract zoom level if stored
             if (data.zoom) {
               setZoom(data.zoom);
               canvas.setZoom(data.zoom);
             }
-            
+
             // Extract pan offset if stored
             if (data.panOffset) {
               setPanOffset(data.panOffset);
               const vpt = canvas.viewportTransform;
               vpt[4] = data.panOffset.x;
               vpt[5] = data.panOffset.y;
+              canvas.setViewportTransform(vpt);
             }
-            
-            await new Promise((resolve, reject) => {
-              canvas.loadFromJSON(data, () => {
-                canvas.renderAll();
-                resolve();
-              }, (error) => {
-                console.error('Error loading canvas data:', error);
-                reject(error);
-              });
-            });
+
+            // Guard against unmount during async load and use promise API to avoid callback timing issues
+            try {
+              await canvas.loadFromJSON(data);
+              canvas.renderAll();
+            } catch (error) {
+              console.error('Error loading canvas data:', error);
+            }
           } catch (error) {
             console.error('Error parsing canvas data:', error);
           }
@@ -224,9 +240,12 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
       isCancelled = true;
       mountedRef.current = false;
       isInitializingRef.current = false;
+
       if (resizeHandlerRef.current) {
         window.removeEventListener('resize', resizeHandlerRef.current);
+        resizeHandlerRef.current = null;
       }
+
       if (canvasRef.current) {
         try {
           canvasRef.current.dispose();
@@ -235,9 +254,14 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
         }
         canvasRef.current = null;
       }
+
+      if (hostElementRef.current) {
+        hostElementRef.current.innerHTML = '';
+      }
+      canvasElementRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canvasId]);
+  }, [canvasId, hostRef]);
 
   /**
    * Get current canvas data as JSON string
@@ -306,22 +330,17 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
       savePenPreferences(brushPreferences);
     }
 
-    // Use PressureBrush for stylus support
-    const pressureBrush = new PressureBrush(canvasRef.current, {
+    // Use PerfectFreehand-based brush for smoother tapered strokes (pressure-aware)
+    const phBrush = new PerfectFreehandBrush(canvasRef.current, {
       pressureSensitivity: brushPreferences.pressureSensitivity,
       pressureMultiplier: brushPreferences.pressureMultiplier,
-      minOpacity: brushPreferences.minOpacity ?? 0.3,
-      maxOpacity: brushPreferences.maxOpacity ?? 1.0,
       baseWidth: brushPreferences.baseWidth,
       color: color || '#000000',
     });
-    
-    pressureBrush.color = color || '#000000';
-    pressureBrush._baseColor = color || '#000000';
-    pressureBrush.width = brushPreferences.baseWidth;
-    
-    canvasRef.current.freeDrawingBrush = pressureBrush;
-    pressureBrushRef.current = pressureBrush;
+
+    // Assign to Fabric's drawing brush API for compatibility
+    canvasRef.current.freeDrawingBrush = phBrush;
+    pressureBrushRef.current = phBrush;
   };
 
   /**
@@ -415,6 +434,8 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
           x2: pointer.x,
           y2: pointer.y,
         });
+        // Ensure Fabric updates the interactive region for hit-testing
+        shape.setCoords();
       } else if (shapeType === 'rectangle') {
         const width = pointer.x - startX;
         const height = pointer.y - startY;
@@ -425,6 +446,8 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
           left: width < 0 ? pointer.x : startX,
           top: height < 0 ? pointer.y : startY,
         });
+        // Keep coordinates in sync while resizing
+        shape.setCoords();
       } else if (shapeType === 'circle') {
         const deltaX = pointer.x - startX;
         const deltaY = pointer.y - startY;
@@ -437,6 +460,8 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
           left: centerX - Math.abs(radius),
           top: centerY - Math.abs(radius),
         });
+        // Update control points/bounds for accurate hit-testing
+        shape.setCoords();
       }
 
       canvas.requestRenderAll();
@@ -446,6 +471,10 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
       if (!isDrawing) return;
 
       isDrawing = false;
+      // Finalize the shape's coordinates so selection/erasing works immediately
+      if (shape && typeof shape.setCoords === 'function') {
+        shape.setCoords();
+      }
       shape = null;
 
       canvas.off('mouse:move', handleMouseMove);
@@ -501,6 +530,10 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
       if (shape) {
         canvas.add(shape);
         canvas.setActiveObject(shape);
+        // Initialize coordinates on creation to avoid stale bounds
+        if (typeof shape.setCoords === 'function') {
+          shape.setCoords();
+        }
       }
 
       canvas.on('mouse:move', handleMouseMove);
@@ -526,7 +559,10 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
     
     if (point) {
       // Zoom to a specific point (mouse position)
-      canvasRef.current.zoomToPoint(point, clampedZoom);
+      const p = point.x !== undefined && point.y !== undefined
+        ? new fabric.Point(point.x, point.y)
+        : point;
+      canvasRef.current.zoomToPoint(p, clampedZoom);
     } else {
       // Zoom to center
       const center = new fabric.Point(
@@ -544,14 +580,7 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
   canvasRef.current.calcOffset();
     
   canvasRef.current.requestRenderAll();
-    
-    // Trigger save
-    if (onCanvasChange) {
-      const data = canvasRef.current.toJSON();
-      data.zoom = clampedZoom;
-      data.panOffset = { x: vpt[4], y: vpt[5] };
-      onCanvasChange(JSON.stringify(data));
-    }
+    // Avoid heavy serialization during interactive zoom; persistence is handled by object events
   };
 
   /**
@@ -616,14 +645,7 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
   setPanOffset({ x: vpt[4], y: vpt[5] });
   canvasRef.current.calcOffset();
   canvasRef.current.requestRenderAll();
-    
-    // Trigger save
-    if (onCanvasChange) {
-      const data = canvasRef.current.toJSON();
-      data.zoom = zoom;
-      data.panOffset = { x: vpt[4], y: vpt[5] };
-      onCanvasChange(JSON.stringify(data));
-    }
+    // Avoid heavy serialization during interactive pan; persistence is handled by object events
   };
 
   /**
@@ -638,7 +660,10 @@ export const useCanvas = (canvasId, initialData, onCanvasChange) => {
     if (pressureBrushRef.current && pressureBrushRef.current.updateSettings) {
       pressureBrushRef.current.updateSettings(updated);
       if (updated.baseWidth && canvasRef.current?.freeDrawingBrush) {
-        canvasRef.current.freeDrawingBrush.width = updated.baseWidth;
+        // Keep size in sync
+        if (typeof canvasRef.current.freeDrawingBrush.width === 'number') {
+          canvasRef.current.freeDrawingBrush.width = updated.baseWidth;
+        }
       }
     }
   };

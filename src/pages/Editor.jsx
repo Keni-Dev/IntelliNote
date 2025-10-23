@@ -238,6 +238,31 @@ function Editor() {
     }
   }, []);
 
+  // Zoom control functions for Navbar
+  const handleZoomIn = useCallback(() => {
+    if (canvasRef.current && canvasRef.current.zoomIn) {
+      canvasRef.current.zoomIn();
+    }
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    if (canvasRef.current && canvasRef.current.zoomOut) {
+      canvasRef.current.zoomOut();
+    }
+  }, []);
+
+  const handleResetZoom = useCallback(() => {
+    if (canvasRef.current && canvasRef.current.resetZoom) {
+      canvasRef.current.resetZoom();
+    }
+  }, []);
+
+  const handleFitToWindow = useCallback(() => {
+    if (canvasRef.current && canvasRef.current.fitToWindow) {
+      canvasRef.current.fitToWindow();
+    }
+  }, []);
+
   // Handle title change
   const handleTitleChange = async (newTitle) => {
     if (!note || newTitle === noteTitle) return;
@@ -332,6 +357,10 @@ function Editor() {
         onTitleChange={handleTitleChange}
         zoom={zoom}
         onZoomChange={handleZoomChange}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onResetZoom={handleResetZoom}
+        onFitToWindow={handleFitToWindow}
       />
 
       {/* Canvas Area - Full screen below navbar */}
@@ -342,6 +371,7 @@ function Editor() {
           initialCanvasData={note.canvasData}
           onCanvasChange={handleCanvasChange}
           onDrawingStateChange={handleDrawingStateChange}
+          onViewChange={(z) => setZoom(z)}
         />
       </div>
     </div>
