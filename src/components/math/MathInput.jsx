@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import MathSymbolPicker from './MathSymbolPicker';
+import { analyzeMathContent } from '../../lib/mathDetection';
 
 const MathInput = ({ value = '', onChange, onEquationDetected }) => {
   const [showSymbolPicker, setShowSymbolPicker] = useState(false);
@@ -8,6 +9,10 @@ const MathInput = ({ value = '', onChange, onEquationDetected }) => {
   const [selectedOption, setSelectedOption] = useState(0);
   const [cursorPosition, setCursorPosition] = useState(0);
   const textareaRef = useRef(null);
+  const analysis = useMemo(() => analyzeMathContent(value || ''), [value]);
+  const confidencePercent = analysis.confidence != null
+    ? Math.round(Math.min(Math.max(analysis.confidence, 0), 1) * 100)
+    : null;
 
   // Math functions and formulas for autocomplete
   const mathFunctions = [
@@ -45,21 +50,18 @@ const MathInput = ({ value = '', onChange, onEquationDetected }) => {
     { label: 'h (Planck)', value: 'h' },
   ];
 
-  // Detect trailing "=" to auto-submit
+  // Surface analysis to parent when requested
   useEffect(() => {
     if (!onEquationDetected) return;
-    // Only trigger when the equation ends with '=' (optional whitespace)
-    if (/=[\s]*$/.test(value)) {
-      onEquationDetected(value);
-    }
-  }, [value, onEquationDetected]);
+    onEquationDetected({ text: value, analysis });
+  }, [analysis, onEquationDetected, value]);
 
   // Handle autocomplete
   const handleInput = (e) => {
     const newValue = e.target.value;
     const cursorPos = e.target.selectionStart;
-    
-  onChange(newValue);
+
+    onChange(newValue);
     setCursorPosition(cursorPos);
 
     // Get word before cursor for autocomplete
@@ -300,9 +302,22 @@ const MathInput = ({ value = '', onChange, onEquationDetected }) => {
           </div>
         </div>
 
-        {/* Character count */}
-        <div className="text-xs text-gray-400 font-mono font-semibold">
-          {value.length} chars
+        {/* Classification badge and character count */}
+        <div className="flex items-center gap-2">
+          <span
+            className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border ${analysis.isMathLike
+              ? 'border-blue-400/60 text-blue-200 bg-blue-500/20'
+              : 'border-gray-500/60 text-gray-300 bg-gray-700/40'
+            }`}
+          >
+            {analysis.classification}
+            {confidencePercent != null && (
+              <span className="ml-1 text-[10px] font-medium">{confidencePercent}%</span>
+            )}
+          </span>
+          <div className="text-xs text-gray-400 font-mono font-semibold">
+            {value.length} chars
+          </div>
         </div>
       </div>
 

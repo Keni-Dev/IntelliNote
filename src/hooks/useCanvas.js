@@ -24,10 +24,11 @@ const normalizePenSettings = (settings = {}, fallback = {}) => {
  * @param {Object} params
  * @param {string} params.canvasId - Stable identifier for the Fabric canvas instance
  * @param {Object} params.initialData - Initial canvas data to load
- * @param {Function} params.onCanvasChange - Callback when canvas changes
  * @param {React.RefObject<HTMLElement>} params.hostRef - Mount point for Fabric-managed canvas DOM
+ * 
+ * Note: onCanvasChange callback removed for performance - parent Canvas component handles persistence
  */
-export const useCanvas = ({ canvasId, initialData, onCanvasChange, hostRef }) => {
+export const useCanvas = ({ canvasId, initialData, hostRef }) => {
   const canvasRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
   const [canvasInstance, setCanvasInstance] = useState(null);
@@ -76,6 +77,8 @@ export const useCanvas = ({ canvasId, initialData, onCanvasChange, hostRef }) =>
     baseCanvas.className = 'fabric-base-canvas';
     baseCanvas.style.display = 'block';
     baseCanvas.style.touchAction = 'none';
+    baseCanvas.style.position = 'relative';
+    baseCanvas.style.zIndex = '1'; // Ensure canvas is above grid (grid has z-index: 0)
     hostElement.appendChild(baseCanvas);
     canvasElementRef.current = baseCanvas;
 
@@ -100,6 +103,17 @@ export const useCanvas = ({ canvasId, initialData, onCanvasChange, hostRef }) =>
           width: window.innerWidth,
           height: window.innerHeight - 64, // Subtract navbar height
           enableRetinaScaling: true,
+          renderOnAddRemove: false, // Don't auto-render on every object add/remove - we'll batch
+          skipTargetFind: false,
+          perPixelTargetFind: false, // Disable expensive per-pixel hit detection for better performance
+          stopContextMenu: true,
+          fireRightClick: true,
+          // PERFORMANCE: Enable object caching to avoid re-rendering unchanged objects
+          objectCaching: true,
+          // PERFORMANCE: Use static canvas rendering when possible
+          statefulCache: true,
+          // PERFORMANCE: Reduce unnecessary canvas clears
+          noScaleCache: false,
         });
 
         // Ensure Fabric recalculates element offset for accurate pointer mapping
@@ -126,6 +140,9 @@ export const useCanvas = ({ canvasId, initialData, onCanvasChange, hostRef }) =>
 
         canvas.setViewportTransform([1, 0, 0, 1, 0, 0]); // Reset transform
         canvas.calcOffset();
+
+        // PERFORMANCE: Enable viewport culling to skip rendering off-screen objects
+        canvas.skipOffscreen = true;
 
         // Enable drawing mode with default settings
         canvas.isDrawingMode = true;
@@ -189,27 +206,34 @@ export const useCanvas = ({ canvasId, initialData, onCanvasChange, hostRef }) =>
           return;
         }
 
-        // Listen for canvas modifications
-        canvas.on('object:modified', () => {
-          if (onCanvasChange) {
-            const jsonData = JSON.stringify(canvas.toJSON());
-            onCanvasChange(jsonData);
-          }
-        });
+        // Debounced canvas change handler to avoid excessive serialization
+        // Disabled during active drawing - will save when drawing completes
+        // let changeTimeout = null;
+        // let pendingChange = false;
+        
+        // const debouncedOnCanvasChange = () => {
+        //   if (!onCanvasChange) return;
+        //   
+        //   // Mark that we have a pending change
+        //   pendingChange = true;
+        //   
+        //   if (changeTimeout) {
+        //     clearTimeout(changeTimeout);
+        //   }
+        //   
+        //   changeTimeout = setTimeout(() => {
+        //     if (pendingChange) {
+        //       const jsonData = JSON.stringify(canvas.toJSON());
+        //       onCanvasChange(jsonData);
+        //       pendingChange = false;
+        //     }
+        //     changeTimeout = null;
+        //   }, 1000); // Wait 1 second after last change before serializing
+        // };
 
-        canvas.on('object:added', () => {
-          if (onCanvasChange) {
-            const jsonData = JSON.stringify(canvas.toJSON());
-            onCanvasChange(jsonData);
-          }
-        });
-
-        canvas.on('object:removed', () => {
-          if (onCanvasChange) {
-            const jsonData = JSON.stringify(canvas.toJSON());
-            onCanvasChange(jsonData);
-          }
-        });
+        // PERFORMANCE: Disable automatic change notifications during drawing
+        // Changes are handled by parent Canvas component's history tracking
+        // This avoids redundant serialization on every stroke
 
         // Handle window resize
         const handleResize = () => {
@@ -641,10 +665,18 @@ export const useCanvas = ({ canvasId, initialData, onCanvasChange, hostRef }) =>
     vpt[4] += deltaX;
     vpt[5] += deltaY;
     
-  canvasRef.current.setViewportTransform(vpt);
-  setPanOffset({ x: vpt[4], y: vpt[5] });
-  canvasRef.current.calcOffset();
-  canvasRef.current.requestRenderAll();
+    canvasRef.current.setViewportTransform(vpt);
+    canvasRef.current.calcOffset();
+    canvasRef.current.requestRenderAll();
+    
+    // Throttle pan offset state updates using RAF
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(() => {
+        setPanOffset({ x: vpt[4], y: vpt[5] });
+      });
+    } else {
+      setPanOffset({ x: vpt[4], y: vpt[5] });
+    }
     // Avoid heavy serialization during interactive pan; persistence is handled by object events
   };
 

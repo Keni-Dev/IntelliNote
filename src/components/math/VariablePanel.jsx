@@ -20,7 +20,7 @@ export default function VariablePanel({
   onDeleteFormula,
   onClearAll
 }) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(true); // Start collapsed by default
   const [showAddVariable, setShowAddVariable] = useState(false);
   const [showAddFormula, setShowAddFormula] = useState(false);
   const [editingVariable, setEditingVariable] = useState(null);

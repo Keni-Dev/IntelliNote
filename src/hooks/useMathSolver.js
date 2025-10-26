@@ -1,5 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { MathEngine } from '../lib/mathEngine';
+import { analyzeMathContent } from '../lib/mathDetection';
+import { 
+  solveWithDeepSeek, 
+  solveIntelligent,
+  assessComplexity 
+} from '../lib/deepseekSolver';
+
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const DEEPSEEK_R1_MODEL = 'deepseek/deepseek-r1:free';
 
 /**
  * Custom hook for integrating math solving capabilities with canvas
@@ -138,16 +147,7 @@ export function useMathSolver(noteId) {
   /**
    * Detect if text contains an equation (has "=" sign)
    */
-  const detectEquation = useCallback((text) => {
-    if (!text || typeof text !== 'string') return false;
-    
-    // Check for equals sign, but exclude comparison operators
-    const hasEquals = text.includes('=');
-    const isComparison = text.includes('==') || text.includes('!=') || 
-                         text.includes('<=') || text.includes('>=');
-    
-    return hasEquals && !isComparison;
-  }, []);
+  const detectEquation = useCallback((text) => analyzeMathContent(text || ''), []);
 
   /**
    * Solve an equation using the math engine
@@ -241,6 +241,89 @@ export function useMathSolver(noteId) {
     if (!engine) return { level: 'none', score: 0, reasons: ['Math engine not initialized'] };
     return engine.calculateConfidence(result, context);
   }, [engine]);
+
+  const solveWithOpenRouter = useCallback(async (equation, options = {}) => {
+    const target = typeof equation === 'string' ? equation.trim() : '';
+    if (!target) {
+      return { success: false, error: 'No equation provided for OpenRouter' };
+    }
+
+    const browserKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_OPENROUTER_API_KEY) || '';
+    let serverKey = '';
+    if (typeof globalThis !== 'undefined' && globalThis.process && globalThis.process.env) {
+      serverKey = globalThis.process.env.VITE_OPENROUTER_API_KEY || '';
+    }
+    const apiKey = browserKey || serverKey;
+
+    if (!apiKey) {
+      return {
+        success: false,
+        error: 'Missing OpenRouter API key. Set VITE_OPENROUTER_API_KEY in your environment.',
+      };
+    }
+
+    const referer = (typeof window !== 'undefined' && window.location?.origin) || 'https://intellinote.app';
+
+    const messages = options.messages || [
+      {
+        role: 'system',
+        content: 'You are Andromeda, a precise math-solving assistant. Solve equations step-by-step and present the final answer clearly.',
+      },
+      {
+        role: 'user',
+        content: options.prompt || `Solve the following equation or expression. Show the key steps and final answer.
+
+${target}`,
+      },
+    ];
+
+    try {
+      const response = await fetch(OPENROUTER_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': referer,
+          'X-Title': 'IntelliNote',
+        },
+        body: JSON.stringify({
+          model: DEEPSEEK_R1_MODEL,
+          messages,
+          max_tokens: options.maxTokens || 512,
+          temperature: options.temperature ?? 0,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorPayload = await response.text().catch(() => '');
+        throw new Error(errorPayload || `OpenRouter request failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const message = data?.choices?.[0]?.message?.content?.trim() || '';
+
+      if (!message) {
+        return {
+          success: false,
+          error: 'OpenRouter returned an empty response.',
+          raw: data,
+        };
+      }
+
+      return {
+        success: true,
+        message,
+        raw: data,
+        usage: data?.usage || null,
+        model: data?.model || DEEPSEEK_R1_MODEL,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || 'Failed to contact OpenRouter',
+      };
+    }
+  }, []);
 
   /**
    * Get all stored variables
@@ -381,7 +464,13 @@ export function useMathSolver(noteId) {
     defineFormula,
     deleteVariable,
     deleteFormula,
-    clearContext
+    clearContext,
+    solveWithOpenRouter,
+    
+    // Advanced solvers (FREE models)
+    solveWithDeepSeek: (eq, opts) => solveWithDeepSeek(eq, opts),
+    solveIntelligent: (eq, opts) => solveIntelligent(eq, engine, opts),
+    assessComplexity: (eq) => assessComplexity(eq),
   };
 }
 

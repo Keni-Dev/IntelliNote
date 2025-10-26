@@ -16,14 +16,11 @@ function Editor() {
   const lastSavedCanvasDataRef = useRef(null);
   const latestCanvasDataRef = useRef(null);
   const saveTimeoutRef = useRef(null);
-  const debounceSaveRef = useRef(null);
   const canvasRef = useRef(null); // Reference to canvas methods
   const saveInFlightRef = useRef(false);
   const pendingFlushRef = useRef(false);
   const isMountedRef = useRef(true);
   const drawingInProgressRef = useRef(false);
-
-  const SAVE_DEBOUNCE_MS = 1500;
 
   useEffect(() => {
     return () => {
@@ -79,11 +76,6 @@ function Editor() {
     const latestData = latestCanvasDataRef.current;
     if (latestData === null || latestData === undefined) {
       return;
-    }
-
-    if (debounceSaveRef.current) {
-      clearTimeout(debounceSaveRef.current);
-      debounceSaveRef.current = null;
     }
 
     if (!immediate && drawingInProgressRef.current) {
@@ -158,31 +150,10 @@ function Editor() {
     }
   }, [note, updateNote]);
 
-  const scheduleSave = useCallback(() => {
-    if (debounceSaveRef.current) {
-      clearTimeout(debounceSaveRef.current);
-    }
-
-    if (drawingInProgressRef.current) {
-      pendingFlushRef.current = true;
-      debounceSaveRef.current = null;
-      return;
-    }
-
-    debounceSaveRef.current = setTimeout(() => {
-      flushPendingSaves().catch(() => {});
-    }, SAVE_DEBOUNCE_MS);
-  }, [flushPendingSaves, SAVE_DEBOUNCE_MS]);
-
   const handleDrawingStateChange = useCallback((isDrawing) => {
     drawingInProgressRef.current = isDrawing;
 
     if (isDrawing) {
-      if (debounceSaveRef.current) {
-        clearTimeout(debounceSaveRef.current);
-        debounceSaveRef.current = null;
-      }
-      pendingFlushRef.current = true;
       if (isMountedRef.current && saveStatus !== 'saving') {
         setSaveStatus('unsaved');
       }
@@ -190,15 +161,9 @@ function Editor() {
       if (pendingFlushRef.current) {
         pendingFlushRef.current = false;
         flushPendingSaves({ immediate: true }).catch(() => {});
-      } else if (
-        latestCanvasDataRef.current !== null &&
-        latestCanvasDataRef.current !== undefined &&
-        latestCanvasDataRef.current !== lastSavedCanvasDataRef.current
-      ) {
-        scheduleSave();
       }
     }
-  }, [flushPendingSaves, scheduleSave, saveStatus]);
+  }, [flushPendingSaves, saveStatus]);
 
   // Handle canvas changes
   const handleCanvasChange = useCallback((newCanvasData) => {
@@ -227,9 +192,7 @@ function Editor() {
     } else if (isMountedRef.current) {
       setSaveStatus('unsaved');
     }
-
-    scheduleSave();
-  }, [scheduleSave]);
+  }, []);
 
   // Handle zoom change from Navbar
   const handleZoomChange = useCallback((newZoom) => {
@@ -295,11 +258,9 @@ function Editor() {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
-      if (debounceSaveRef.current) {
-        clearTimeout(debounceSaveRef.current);
-      }
     };
-  }, [flushPendingSaves]);
+    // Re-run cleanup when switching between notes so previous note's changes flush before loading the next one.
+  }, [flushPendingSaves, noteId]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {

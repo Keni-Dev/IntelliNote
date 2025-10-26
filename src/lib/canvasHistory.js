@@ -1,9 +1,10 @@
 /**
  * Canvas History Manager
  * Manages undo/redo functionality by tracking individual actions/objects
+ * PERFORMANCE: Reduced default max history for better memory usage with many objects
  */
 class CanvasHistory {
-  constructor(maxHistory = 50) {
+  constructor(maxHistory = 30) { // Reduced from 50 to 30
     this.undoStack = [];
     this.redoStack = [];
     this.maxHistory = maxHistory;

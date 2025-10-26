@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import 'katex/dist/katex.min.css';
 import { BlockMath, InlineMath } from 'react-katex';
-import { Copy, ChevronDown, ChevronUp, RefreshCw, Info, AlertCircle, Lightbulb, MapPin } from 'lucide-react';
+import { Copy, ChevronDown, ChevronUp, RefreshCw, Info, AlertCircle, Lightbulb, MapPin, Sparkles, Loader2 } from 'lucide-react';
 import GlassCard from '../common/GlassCard';
 import GlassButton from '../common/GlassButton';
 import Toast from '../common/Toast';
@@ -17,7 +17,13 @@ export default function MathSolutionDisplay({
   context = null,
   suggestions = [],
   confidence = null,
+  analysis = null,
+  llmStatus = 'idle',
+  llmProvider = 'openrouter/andromeda-alpha',
+  llmResponse = null,
+  llmError = null,
   onRecalculate,
+  onAskLLM,
   onNavigateToSource,
   onApplySuggestion,
   onClose,
@@ -28,6 +34,12 @@ export default function MathSolutionDisplay({
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [currentPosition, setCurrentPosition] = useState(position);
+  const llmIsLoading = llmStatus === 'loading';
+  const classificationLabel = analysis?.classification || null;
+  const classificationConfidence = analysis?.confidence != null
+    ? Math.round(Math.max(0, Math.min(analysis.confidence, 1)) * 100)
+    : null;
+  const llmDisplayName = llmProvider?.split('/')?.pop() || llmProvider || 'Andromeda';
 
   // Handle drag start
   const handleDragStart = (e) => {
@@ -96,6 +108,17 @@ export default function MathSolutionDisplay({
     });
   };
 
+  const copyLLMResponse = () => {
+    if (!llmResponse) {
+      return;
+    }
+    navigator.clipboard.writeText(llmResponse).then(() => {
+      setToast({ show: true, message: `${llmDisplayName} answer copied!`, type: 'success' });
+    }).catch(() => {
+      setToast({ show: true, message: 'Failed to copy response', type: 'error' });
+    });
+  };
+
   // Check if there are any variable substitutions to show
   const hasVariables = Object.keys(variables).length > 0;
 
@@ -143,12 +166,18 @@ export default function MathSolutionDisplay({
         <div className={`p-4 shadow-xl border-2 border-blue-500/50 rounded-xl bg-gradient-to-br from-blue-600/95 to-purple-600/95 backdrop-blur-xl cursor-move select-none transition-all ${isDragging ? 'scale-105 shadow-2xl' : ''}`}>
           {/* Header */}
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <svg className="w-4 h-4 text-white/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
               </svg>
               <h3 className="text-sm font-semibold text-white">Solution</h3>
               {getConfidenceBadge()}
+              {classificationLabel && (
+                <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/15 text-white/80 border border-white/25">
+                  {classificationLabel}
+                  {classificationConfidence != null ? ` · ${classificationConfidence}%` : ''}
+                </span>
+              )}
             </div>
             <div className="flex gap-2">
               {onRecalculate && (
@@ -158,6 +187,20 @@ export default function MathSolutionDisplay({
                   title="Recalculate"
                 >
                   <RefreshCw className="w-4 h-4 text-white" />
+                </button>
+              )}
+              {onAskLLM && (
+                <button
+                  onClick={onAskLLM}
+                  className="p-1.5 rounded-lg hover:bg-white/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  title={`Ask ${llmDisplayName}`}
+                  disabled={llmIsLoading}
+                >
+                  {llmIsLoading ? (
+                    <Loader2 className="w-4 h-4 text-white animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 text-white" />
+                  )}
                 </button>
               )}
               <button
@@ -187,6 +230,14 @@ export default function MathSolutionDisplay({
             <div className="text-sm text-white">
               <InlineMath math={equation} />
             </div>
+            {analysis && (
+              <div className="mt-1 text-[11px] text-blue-100/80">
+                Classified as {analysis.classification}
+                {classificationConfidence != null && (
+                  <span> · {classificationConfidence}% confidence</span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Context Information */}
@@ -356,6 +407,43 @@ export default function MathSolutionDisplay({
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {(llmIsLoading || llmError || llmResponse) && (
+            <div className="border-t border-white/20 pt-3 mt-3">
+              <div className="flex items-center gap-2 text-sm text-white mb-2">
+                <Sparkles className="w-4 h-4" />
+                <span>{llmDisplayName} insight</span>
+              </div>
+
+              {llmIsLoading && (
+                <div className="flex items-center gap-2 text-xs text-blue-100 bg-white/10 border border-white/20 rounded-lg px-3 py-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Contacting {llmDisplayName}…</span>
+                </div>
+              )}
+
+              {llmError && (
+                <div className="mt-2 p-2 bg-rose-500/20 border border-rose-400/60 rounded text-xs text-rose-100">
+                  {llmError}
+                </div>
+              )}
+
+              {llmResponse && (
+                <div className="mt-2 p-3 bg-indigo-500/25 border border-indigo-300/40 rounded-lg text-sm text-white whitespace-pre-wrap leading-relaxed">
+                  <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-indigo-100/80 mb-2">
+                    <span>{llmDisplayName}</span>
+                    <button
+                      onClick={copyLLMResponse}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/20 hover:bg-white/30 transition-colors text-white text-[10px]"
+                    >
+                      <Copy className="w-3 h-3" /> Copy
+                    </button>
+                  </div>
+                  {llmResponse}
+                </div>
+              )}
             </div>
           )}
 

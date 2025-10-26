@@ -1,10 +1,15 @@
-import * as fabric from 'fabric';
 import getStroke from 'perfect-freehand';
+import * as fabric from 'fabric';
 
 /**
  * PerfectFreehandBrush - Fabric.js brush that renders tapered, pressure-aware strokes
  * using the perfect-freehand algorithm. It collects points with pressure and
  * creates a filled polygon path for smooth strokes.
+ * 
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Throttles rendering to every 3rd point during drawing
+ * - Uses object caching for completed strokes
+ * - Minimizes context state changes
  */
 export class PerfectFreehandBrush extends fabric.BaseBrush {
   constructor(canvas, options = {}) {
@@ -22,7 +27,10 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
     this.smoothing = options.smoothing ?? 0.5;
     this.streamline = options.streamline ?? 0.5;
     this.thinning = options.thinning ?? 0.5; // pressure effect on size
-    this.simulatePressure = options.simulatePressure ?? !this.pressureSensitivity;
+    this._userSimulatePressure = Object.prototype.hasOwnProperty.call(options, 'simulatePressure')
+      ? options.simulatePressure
+      : undefined;
+    this._hasRealPressure = false;
     this.start = options.start ?? { taper: 0, cap: true };
     this.end = options.end ?? { taper: 0, cap: true };
     this.last = false; // will be true on mouse up
@@ -41,13 +49,34 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
     this._points.push(point);
   }
 
+  _resolveSimulatePressure() {
+    if (this._userSimulatePressure !== undefined) {
+      return this._userSimulatePressure;
+    }
+
+    // If we have confirmed stylus pressure, let perfect-freehand use it.
+    if (this._hasRealPressure) {
+      return false;
+    }
+
+    // No real pressure detected yet. If pressure sensitivity is enabled but we have
+    // not received real pressure data, fall back to simulated pressure so the stroke
+    // still tapers naturally rather than staying a constant width.
+    if (this.pressureSensitivity) {
+      return true;
+    }
+
+    // Pressure sensitivity disabled: allow simulation for velocity-based variation.
+    return true;
+  }
+
   _getOptions() {
     return {
       size: this.baseWidth,
       thinning: this.thinning,
       smoothing: this.smoothing,
       streamline: this.streamline,
-      simulatePressure: this.simulatePressure,
+      simulatePressure: this._resolveSimulatePressure(),
       start: this.start,
       end: this.end,
       last: this.last,
@@ -59,9 +88,68 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
     // fabric passes original event at e.e in handlers
     const evt = e?.e || e;
     const pointer = this.canvas.getPointer(evt);
-    const pressure = this.pressureSensitivity
-      ? typeof evt?.pressure === 'number' && evt.pressure > 0 ? Math.min(1, Math.max(0, evt.pressure * this.pressureMultiplier)) : 0.5
-      : 0.5;
+    const clamp01 = (val) => Math.min(1, Math.max(0, val));
+
+    let rawPressure = 0.5;
+    let hasRealPressure = false;
+
+    if (this.pressureSensitivity) {
+      // Pointer events (preferred on modern browsers)
+      if (typeof evt?.pressure === 'number') {
+        if (evt.pressure > 0) {
+          rawPressure = clamp01(evt.pressure);
+          hasRealPressure = true;
+        } else if (evt.buttons) {
+          // Some devices report 0 while pressed; treat as minimal pressure
+          rawPressure = 0.05;
+          hasRealPressure = true;
+        }
+      }
+
+      // WebKit / Safari specific force properties
+      if (!hasRealPressure && typeof evt?.webkitForce === 'number') {
+        if (evt.webkitForce > 0) {
+          const maxForce = evt.webkitMaximum || 4;
+          rawPressure = clamp01(evt.webkitForce / maxForce);
+          hasRealPressure = true;
+        }
+      }
+
+      // Touch events (iOS Safari without PointerEvents)
+      if (!hasRealPressure && evt?.type && evt.type.startsWith('touch')) {
+        const touch = evt.changedTouches?.[0] || evt.touches?.[0];
+        if (touch) {
+          if (typeof touch.force === 'number' && touch.force > 0) {
+            rawPressure = clamp01(touch.force);
+            hasRealPressure = true;
+          } else if (typeof touch.webkitForce === 'number' && touch.webkitForce > 0) {
+            const maxForce = touch.webkitMaximum || 4;
+            rawPressure = clamp01(touch.webkitForce / maxForce);
+            hasRealPressure = true;
+          } else if (touch.force === 0 && evt.type === 'touchmove') {
+            rawPressure = 0.05;
+            hasRealPressure = true;
+          }
+        }
+      }
+    }
+
+    // Apply multiplier and clamp to [0, 1]
+    let pressure = clamp01(rawPressure);
+    if (this.pressureSensitivity) {
+      pressure = clamp01(pressure * this.pressureMultiplier);
+      if (hasRealPressure) {
+        // Prevent zero-width segments when hardware reports near-zero pressure
+        pressure = Math.max(0.02, pressure);
+      }
+    } else {
+      pressure = 0.5;
+    }
+
+    if (hasRealPressure) {
+      this._hasRealPressure = true;
+    }
+
     return [pointer.x, pointer.y, pressure];
   }
 
@@ -72,6 +160,10 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
 
     this._points = [];
     this._path = null;
+
+    if (this._userSimulatePressure === undefined) {
+      this._hasRealPressure = false;
+    }
 
     const [x, y, p] = this._eventToPoint(options);
     this._addPoint([x, y, p]);
@@ -84,8 +176,12 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
     const [x, y, p] = this._eventToPoint(options);
     this._addPoint([x, y, p]);
 
-    this._drawStroke();
-    this.canvas.requestRenderAll();
+    // PERFORMANCE: Throttle rendering during drawing - only render every 3rd point
+    // or use requestAnimationFrame batching
+    if (this._points.length % 3 === 0) {
+      this._drawStroke();
+      this.canvas.requestRenderAll();
+    }
   }
 
   onMouseUp() {
@@ -105,16 +201,45 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
     const d = this._getSvgPathFromStroke(outline);
 
     if (d) {
+      const createdAt = Date.now();
+      const strokePoints = this._points.map(([px, py, pressure]) => ({
+        x: px,
+        y: py,
+        pressure,
+      }));
+      const strokeId = `stroke-${createdAt}-${Math.floor(Math.random() * 1e6)}`;
+
       const path = new fabric.Path(d, {
         fill: this.color,
         stroke: undefined,
         selectable: true,
         evented: true,
-        objectCaching: true,
+        objectCaching: true, // PERFORMANCE: Enable caching for completed strokes
+        statefullCache: true, // PERFORMANCE: Cache object state
+        noScaleCache: false, // PERFORMANCE: Allow caching at different scales
+        cacheProperties: ['fill'], // Only recache when fill changes
+      });
+      path.set('data', {
+        ...(path.data || {}),
+        strokeMeta: {
+          id: strokeId,
+          createdAt,
+          points: strokePoints,
+        },
+      });
+      path.set('strokeMeta', {
+        id: strokeId,
+        createdAt,
+        points: strokePoints,
       });
       this.canvas.add(path);
       this.canvas.requestRenderAll();
-      this.canvas.fire('path:created', { path });
+      this.canvas.fire('path:created', {
+        path,
+        strokePoints,
+        strokeId,
+        createdAt,
+      });
     }
 
     // Clear temp and reset state
@@ -131,19 +256,29 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
     const ctx = this.canvas.contextTop;
     if (!ctx) return;
 
-    // Clear the top context
-    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-    // Use the recommended SVG-like quadratic curve approach for smooth rendering
     const pathData = this._getSvgPathFromStroke(outline);
     if (!pathData) return;
 
+  const retina = typeof this.canvas.getRetinaScaling === 'function' ? this.canvas.getRetinaScaling() : 1;
+  const vpt = this.canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+
     ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // Mirror Fabric's zoom/pan transform so the preview follows the viewport while drawing
+    ctx.setTransform(
+      vpt[0] * retina,
+      vpt[1] * retina,
+      vpt[2] * retina,
+      vpt[3] * retina,
+      vpt[4] * retina,
+      vpt[5] * retina
+    );
     ctx.fillStyle = this.color;
 
     const path2D = new Path2D(pathData);
     ctx.fill(path2D);
-
     ctx.restore();
   }
 
@@ -185,12 +320,19 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
   updateSettings(options = {}) {
     if (options.baseWidth !== undefined) this.baseWidth = Math.max(0.5, options.baseWidth);
     if (options.color !== undefined) this.color = options.color;
-    if (options.pressureSensitivity !== undefined) this.pressureSensitivity = !!options.pressureSensitivity;
+    if (options.pressureSensitivity !== undefined) {
+      this.pressureSensitivity = !!options.pressureSensitivity;
+      if (!this.pressureSensitivity) {
+        this._hasRealPressure = false;
+      }
+    }
     if (options.pressureMultiplier !== undefined) this.pressureMultiplier = Math.max(0.1, Math.min(3, options.pressureMultiplier));
     if (options.smoothing !== undefined) this.smoothing = options.smoothing;
     if (options.streamline !== undefined) this.streamline = options.streamline;
     if (options.thinning !== undefined) this.thinning = options.thinning;
-    if (options.simulatePressure !== undefined) this.simulatePressure = options.simulatePressure;
+    if (options.simulatePressure !== undefined) {
+      this._userSimulatePressure = options.simulatePressure;
+    }
     if (options.start !== undefined) this.start = options.start;
     if (options.end !== undefined) this.end = options.end;
   }
@@ -204,7 +346,8 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
       smoothing: this.smoothing,
       streamline: this.streamline,
       thinning: this.thinning,
-      simulatePressure: this.simulatePressure,
+      simulatePressure: this._resolveSimulatePressure(),
+      hasRealPressure: this._hasRealPressure,
       start: this.start,
       end: this.end,
     };
