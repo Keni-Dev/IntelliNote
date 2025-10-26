@@ -90,7 +90,7 @@ export const recognizeHandwriting = async (strokes, options = {}) => {
     return { latex: '', confidence: 0, error: 'Unable to render strokes for OCR.', usedFallback: true };
   }
 
-  const model = config.openrouterOCRModel || 'openai/gpt-4o-mini';
+  const model = config.openrouterOCRModel || 'mistralai/mistral-small-3.1-24b-instruct:free';
 
   setOCRStatus({ state: 'pending', message: 'Contacting OpenRouter…' });
 

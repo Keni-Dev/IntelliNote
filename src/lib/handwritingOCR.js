@@ -503,14 +503,27 @@ export const getContextArea = (source, position, radius = 180, options = {}) => 
   const analyzer = options.analyzer || new StrokeAnalyzer(options);
   const strokes = extractStrokes(source, options.startTime, options.endTime, { analyzer });
 
+  // Use elliptical selection strongly favoring horizontal direction
+  // Math equations are typically horizontal, so we need much wider horizontal reach
+  const horizontalRadius = radius * 2.5;  // 2.5x wider horizontally (was 1.5x)
+  const verticalRadius = radius * 0.75;   // Keep vertical the same
+
   return strokes.filter((stroke) => {
     if (!stroke || !stroke.bounds) {
       return false;
     }
     const dx = stroke.bounds.centerX - position.x;
     const dy = stroke.bounds.centerY - position.y;
-    const effective = radius + Math.max(stroke.bounds.width, stroke.bounds.height) / 2;
-    return dx * dx + dy * dy <= effective * effective;
+    
+    // Add stroke size to effective radius
+    const strokeSize = Math.max(stroke.bounds.width, stroke.bounds.height) / 2;
+    const effectiveHorizontal = horizontalRadius + strokeSize;
+    const effectiveVertical = verticalRadius + strokeSize;
+    
+    // Elliptical distance check (strongly favor horizontal)
+    const normalizedDx = dx / effectiveHorizontal;
+    const normalizedDy = dy / effectiveVertical;
+    return (normalizedDx * normalizedDx + normalizedDy * normalizedDy) <= 1;
   });
 };
 

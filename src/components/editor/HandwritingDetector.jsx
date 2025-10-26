@@ -385,12 +385,68 @@ const HandwritingDetector = ({
     // Use the larger of the two for the context search radius
     const dynamicRadius = Math.max(horizontalRadius, verticalRadius * 1.5);
     
-    // Expand active area to include nearby context with anisotropic expansion
-    const expandedActiveArea = expandBoundsAnisotropic(
-      activeArea, 
-      horizontalRadius * 0.5,  // Expand 50% of horizontal radius on each side
-      verticalRadius * 0.4     // Expand 40% of vertical radius on each side
-    );    // Only look at strokes within the expanded active area
+    // Smart horizontal boundary detection: Find nearby equations and stop expansion at them
+    // This allows long equations to expand but prevents conflicts with adjacent ones
+    const findNearbyEquationBoundary = (center, searchRadius, direction) => {
+      // direction: 'left' or 'right'
+      const sign = direction === 'left' ? -1 : 1;
+      let boundaryDistance = searchRadius;
+      
+      // Get all strokes NOT in the active area (potential other equations)
+      const otherStrokes = allStrokes.filter((stroke) => {
+        if (!stroke || !stroke.createdAt) return false;
+        const createdAt = stroke.createdAt || 0;
+        // Only consider strokes that are NOT part of current writing session
+        return now - createdAt > ACTIVE_WRITING_WINDOW;
+      });
+      
+      // Find the closest stroke in the specified direction
+      for (const stroke of otherStrokes) {
+        const strokeBounds = getStrokeBounds(stroke, analyzer);
+        if (!strokeBounds) continue;
+        
+        const dx = strokeBounds.centerX - center.x;
+        const dy = Math.abs(strokeBounds.centerY - center.y);
+        
+        // Only consider strokes in the correct direction and roughly same height
+        if ((sign > 0 && dx <= 0) || (sign < 0 && dx >= 0)) continue;
+        if (dy > verticalRadius * 2) continue; // Not on same horizontal line
+        
+        const distance = Math.abs(dx);
+        
+        // If we found a stroke closer than current boundary, update it
+        // Leave some gap (20px) to avoid including it
+        if (distance < boundaryDistance) {
+          boundaryDistance = Math.max(20, distance - 30);
+        }
+      }
+      
+      return boundaryDistance;
+    };
+    
+    // Calculate adaptive horizontal expansion based on nearby equations
+    const leftBoundary = findNearbyEquationBoundary(
+      { x: activeArea.centerX, y: activeArea.centerY },
+      horizontalRadius * 0.5,
+      'left'
+    );
+    const rightBoundary = findNearbyEquationBoundary(
+      { x: activeArea.centerX, y: activeArea.centerY },
+      horizontalRadius * 0.5,
+      'right'
+    );
+    
+    // Expand active area with adaptive boundaries
+    const expandedActiveArea = {
+      minX: activeArea.minX - leftBoundary,
+      minY: activeArea.minY - (verticalRadius * 0.4),
+      maxX: activeArea.maxX + rightBoundary,
+      maxY: activeArea.maxY + (verticalRadius * 0.4),
+      get width() { return this.maxX - this.minX; },
+      get height() { return this.maxY - this.minY; },
+      get centerX() { return (this.minX + this.maxX) / 2; },
+      get centerY() { return (this.minY + this.maxY) / 2; },
+    };    // Only look at strokes within the expanded active area
     // This ensures we only detect equations in the region user is currently writing
     const focusedStrokes = allStrokes.filter((stroke) => {
       const strokeBounds = getStrokeBounds(stroke, analyzer);

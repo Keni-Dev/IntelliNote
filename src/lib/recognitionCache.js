@@ -9,7 +9,7 @@ import CryptoJS from 'crypto-js';
 
 const CACHE_STORAGE_KEY = 'intellinote:recognition:cache';
 const METRICS_STORAGE_KEY = 'intellinote:recognition:metrics';
-const MAX_CACHE_SIZE = 100;
+const MAX_CACHE_SIZE = 50; // Reduced from 100 to avoid quota issues
 const MAX_AGE_DAYS = 7;
 const MAX_AGE_MS = MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
 
@@ -28,7 +28,16 @@ class RecognitionCache {
       errors: [],
       successfulRecognitions: 0,
     };
+    this.isDirty = false; // Track if cache needs persistence
     this.load();
+    
+    // Auto-persist every 30 seconds if dirty
+    this.persistTimer = setInterval(() => {
+      if (this.isDirty) {
+        this.persist();
+        this.isDirty = false;
+      }
+    }, 30000);
   }
 
   /**
@@ -104,7 +113,8 @@ class RecognitionCache {
       timestamp: Date.now(),
     });
 
-    this.persist();
+    // Mark as dirty for next periodic persist
+    this.isDirty = true;
   }
 
   /**
@@ -123,6 +133,7 @@ class RecognitionCache {
    */
   clear() {
     this.cache.clear();
+    this.isDirty = true;
     this.persist();
   }
 
@@ -142,6 +153,7 @@ class RecognitionCache {
     }
 
     if (removedCount > 0) {
+      this.isDirty = true;
       this.persist();
     }
 
@@ -243,7 +255,21 @@ class RecognitionCache {
       
       localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(data));
     } catch (error) {
-      console.warn('[RecognitionCache] Failed to persist cache:', error);
+      if (error.name === 'QuotaExceededError' || error.code === 22) {
+        console.warn('[RecognitionCache] Storage quota exceeded, clearing cache');
+        // Clear cache and try again with empty cache
+        this.cache.clear();
+        try {
+          localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify({
+            entries: [],
+            timestamp: Date.now(),
+          }));
+        } catch (retryError) {
+          console.error('[RecognitionCache] Failed to clear and persist:', retryError);
+        }
+      } else {
+        console.warn('[RecognitionCache] Failed to persist cache:', error);
+      }
     }
   }
 

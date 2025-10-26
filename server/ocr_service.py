@@ -2,6 +2,8 @@ import base64
 import io
 import os
 from typing import Optional
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +11,10 @@ from pydantic import BaseModel
 from PIL import Image
 
 app = FastAPI(title="TrOCR Math OCR Service", version="0.2.0")
+
+# Create directory for saving images
+SAVE_DIR = Path(__file__).parent / "ocr_images"
+SAVE_DIR.mkdir(exist_ok=True)
 
 # Allow CORS for local development
 app.add_middleware(
@@ -141,6 +147,16 @@ async def recognize(req: RecognizeBody):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Save the image with timestamp
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"equation_{timestamp}.png"
+        filepath = SAVE_DIR / filename
+        img.save(filepath)
+        print(f"[OCR] Saved image to: {filepath}")
+    except Exception as e:
+        print(f"[OCR] Warning: Failed to save image: {e}")
+
     try:
         processor, model, device = load_trocr()
         import torch  # type: ignore
@@ -154,6 +170,9 @@ async def recognize(req: RecognizeBody):
         text = (text or "").strip()
         # TrOCR may not output strict LaTeX; we pass through and let the front-end handle.
         confidence = 0.8 if text else 0.0
+        
+        print(f"[OCR] Recognized: '{text}' (confidence: {confidence})")
+        
         return {"latex": text, "confidence": confidence, "boxes": None}
     except RuntimeError as e:
         raise HTTPException(

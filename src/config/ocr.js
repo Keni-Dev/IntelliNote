@@ -6,7 +6,7 @@ const CREDENTIAL_STORAGE_KEY = 'intellinote:ocr:credentials';
 const HISTORY_STORAGE_KEY = 'intellinote:ocr:history';
 const DEFAULT_CONFIG = {
   mode: 'hybrid',
-  provider: 'local', // 'openrouter' | 'local' (local TrOCR service) - default to local
+  provider: 'openrouter', // 'openrouter' | 'local' (local TrOCR service)
   language: 'en-US',
   math: true,
   minConfidence: 0.5, // Lower threshold so simple equations don't escalate needlessly
@@ -40,7 +40,7 @@ let credentialsState = {
   // OpenRouter
   openrouterApiKey: typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_OPENROUTER_API_KEY ?? '') : '',
 };
-const recognitionCache = new LRUCache(200); // LRU cache with 200 item capacity
+const recognitionCache = new LRUCache(100); // LRU cache with 100 item capacity (reduced to avoid quota issues)
 const recognitionHistory = [];
 
 const safeParse = (value) => {
