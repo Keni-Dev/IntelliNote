@@ -122,9 +122,11 @@ export const useCanvas = ({ canvasId, initialData, hostRef }) => {
         // Disable default touch actions on interactive layers to avoid browser gestures
         if (canvas.upperCanvasEl) {
           canvas.upperCanvasEl.style.touchAction = 'none';
+          canvas.upperCanvasEl.style.zIndex = '2'; // Upper canvas (drawing overlay) on top
         }
         if (canvas.lowerCanvasEl) {
           canvas.lowerCanvasEl.style.touchAction = 'none';
+          canvas.lowerCanvasEl.style.zIndex = '1'; // Lower canvas (objects) above grid
         }
 
         if (isCancelled) {

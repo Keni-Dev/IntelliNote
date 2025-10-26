@@ -85,6 +85,7 @@ const getActiveWritingArea = (strokes, analyzer, expansionRadius = 100) => {
 const HandwritingDetector = ({
   canvas,
   strokes,
+  strokesVersion, // Version number that increments when strokes change
   pauseDuration = 2000,
   recentWindowMs = 12000,
   activeWritingWindowMs = 5000,
@@ -323,7 +324,7 @@ const HandwritingDetector = ({
     }
 
     // Calculate the active writing area - this is where the user just drew
-    const activeArea = getActiveWritingArea(activeStrokes, analyzer, 80);
+    const activeArea = getActiveWritingArea(activeStrokes, analyzer, 30);
     
     if (!activeArea) {
       if (lastSignatureRef.current !== null) {
@@ -338,11 +339,11 @@ const HandwritingDetector = ({
     // Dynamic detection radius based on the size of what user drew
     // Larger drawings get wider context, smaller drawings stay focused
     const primaryDimension = Math.max(activeArea.width, activeArea.height);
-    const baseRadius = Math.max(primaryDimension * 1.2, 120); // At least 120px, or 120% of drawing size
-    const dynamicRadius = Math.min(baseRadius, 320); // Cap at 320px to avoid huge searches
+    const baseRadius = Math.max(primaryDimension * 0.6, 60); // At least 60px, or 60% of drawing size
+    const dynamicRadius = Math.min(baseRadius, 150); // Cap at 150px to avoid conflicts
     
-    // Expand active area to include nearby context
-    const expandedActiveArea = expandBounds(activeArea, dynamicRadius * 0.4);    // Only look at strokes within the expanded active area
+    // Expand active area to include nearby context (smaller expansion)
+    const expandedActiveArea = expandBounds(activeArea, dynamicRadius * 0.3);    // Only look at strokes within the expanded active area
     // This ensures we only detect equations in the region user is currently writing
     const focusedStrokes = allStrokes.filter((stroke) => {
       const strokeBounds = getStrokeBounds(stroke, analyzer);
@@ -685,7 +686,7 @@ const HandwritingDetector = ({
         timerRef.current = null;
       }
     };
-  }, [cancelCloudRequests, pauseDuration, strokes, processDetection, releaseFeedback, notifyCandidate, enabled]);
+  }, [cancelCloudRequests, pauseDuration, strokes, strokesVersion, processDetection, releaseFeedback, notifyCandidate, enabled]);
 
   useEffect(() => {
     // PERFORMANCE: Skip detection updates when disabled

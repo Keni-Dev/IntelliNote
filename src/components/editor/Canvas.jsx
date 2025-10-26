@@ -86,6 +86,7 @@ const Canvas = forwardRef(({
   const drawingInProgressRef = useRef(false);
   const strokeAnalyzerRef = useRef(null);
   const strokesRef = useRef([]);
+  const [strokesVersion, setStrokesVersion] = useState(0); // Trigger HandwritingDetector updates
   const releaseHighlightRef = useRef(null);
   const pendingHandwritingRef = useRef(null);
   const lastSolveTriggerRef = useRef({ signature: null, timestamp: 0 });
@@ -224,6 +225,7 @@ const Canvas = forwardRef(({
       pendingHandwritingRef.current = null;
       setHandwritingSuggestion(null);
     strokesRef.current = [];
+      setStrokesVersion(0);
       lastSolveTriggerRef.current = { signature: null, timestamp: 0 };
       setHandwritingHighlight(null);
       return;
@@ -342,6 +344,8 @@ const Canvas = forwardRef(({
         // Avoid expensive sort on every stroke
         strokesRef.current.push(entry);
       }
+      // Trigger HandwritingDetector update
+      setStrokesVersion(v => v + 1);
     };
 
     const removeStrokeById = (id) => {
@@ -351,6 +355,8 @@ const Canvas = forwardRef(({
       const next = strokesRef.current.filter((stroke) => stroke.id !== id);
       if (next.length !== strokesRef.current.length) {
         strokesRef.current = next;
+        // Trigger HandwritingDetector update
+        setStrokesVersion(v => v + 1);
       }
     };
 
@@ -404,6 +410,7 @@ const Canvas = forwardRef(({
       const objects = typeof canvas.getObjects === 'function' ? canvas.getObjects() : [];
       if (!objects.length) {
         strokesRef.current = [];
+        setStrokesVersion(0);
         return;
       }
       const seeded = [];
@@ -420,6 +427,7 @@ const Canvas = forwardRef(({
         }
       });
       strokesRef.current = seeded.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      setStrokesVersion(v => v + 1);
     };
 
     initializeFromCanvas();
@@ -2380,6 +2388,7 @@ const Canvas = forwardRef(({
           showGuides,
         }}
         onViewSettingsChange={handleViewSettingsChange}
+        onOCRSettingsOpen={() => setShowOCRSettings(true)}
       />
       {shouldShowHandwritingHighlight && activeHighlightPalette && (
         <div
@@ -2678,7 +2687,8 @@ const Canvas = forwardRef(({
       <HandwritingDetector
         canvas={canvas}
         strokes={strokesRef.current}
-        pauseDuration={3000}
+        strokesVersion={strokesVersion}
+        pauseDuration={1500}
         recentWindowMs={20000}
         activeWritingWindowMs={5000}
         contextRadius={420}

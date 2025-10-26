@@ -45,6 +45,12 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
     return true;
   }
 
+  // Fabric v6 requirement - render the brush preview on top layer
+  _render() {
+    // Draw the current stroke in progress
+    this._drawStroke();
+  }
+
   _addPoint(point) {
     this._points.push(point);
   }

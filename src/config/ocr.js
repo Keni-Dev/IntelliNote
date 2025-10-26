@@ -6,7 +6,7 @@ const CREDENTIAL_STORAGE_KEY = 'intellinote:ocr:credentials';
 const HISTORY_STORAGE_KEY = 'intellinote:ocr:history';
 const DEFAULT_CONFIG = {
   mode: 'hybrid',
-  provider: 'openrouter', // 'openrouter' | 'local' (local TrOCR service)
+  provider: 'local', // 'openrouter' | 'local' (local TrOCR service) - default to local
   language: 'en-US',
   math: true,
   minConfidence: 0.5, // Lower threshold so simple equations don't escalate needlessly

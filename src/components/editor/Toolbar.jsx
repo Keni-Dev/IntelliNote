@@ -38,6 +38,7 @@ const Toolbar = ({
   getPenSettings,
   gridSettings = {},
   onViewSettingsChange,
+  onOCRSettingsOpen,
 }) => {
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const [isPenSettingsOpen, setIsPenSettingsOpen] = useState(false);
@@ -1012,7 +1013,7 @@ const Toolbar = ({
             )}
 
             {/* Show Alignment Guides Toggle */}
-            <div className="mb-2">
+            <div className="mb-4">
               <label className="flex items-center justify-between cursor-pointer">
                 <span className="text-xs text-gray-300 font-medium">Alignment Guides</span>
                 <div className="relative">
@@ -1037,6 +1038,33 @@ const Toolbar = ({
                 Show guides when moving objects
               </p>
             </div>
+
+            {/* Divider */}
+            <div className="border-t border-gray-700 my-4"></div>
+
+            {/* OCR Settings Button */}
+            <button
+              onClick={() => {
+                setIsViewSettingsOpen(false);
+                if (typeof onOCRSettingsOpen === 'function') {
+                  onOCRSettingsOpen();
+                }
+              }}
+              className={cn(
+                'w-full px-3 py-2.5 rounded-lg',
+                'bg-gray-700/50 hover:bg-gray-600/70',
+                'text-gray-200 text-xs font-medium',
+                'border border-gray-600 hover:border-gray-500',
+                'transition-all duration-200',
+                'flex items-center justify-between gap-2'
+              )}
+            >
+              <span>OCR Settings</span>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
           </div>
         )}
       </div>
@@ -1072,6 +1100,7 @@ Toolbar.propTypes = {
     showGuides: PropTypes.bool,
   }),
   onViewSettingsChange: PropTypes.func,
+  onOCRSettingsOpen: PropTypes.func,
 };
 
 export default Toolbar;
