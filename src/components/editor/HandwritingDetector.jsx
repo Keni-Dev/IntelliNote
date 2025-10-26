@@ -36,6 +36,32 @@ const expandBounds = (bounds, padding = 0) => {
   };
 };
 
+/**
+ * Expand bounds with different padding for horizontal and vertical
+ * Equations are typically more horizontal, so we expand more in that direction
+ */
+const expandBoundsAnisotropic = (bounds, horizontalPad = 0, verticalPad = 0) => {
+  if (!bounds) {
+    return null;
+  }
+  const hPad = Math.max(0, horizontalPad);
+  const vPad = Math.max(0, verticalPad);
+  const minX = bounds.minX - hPad;
+  const minY = bounds.minY - vPad;
+  const maxX = bounds.maxX + hPad;
+  const maxY = bounds.maxY + vPad;
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+    centerX: (minX + maxX) / 2,
+    centerY: (minY + maxY) / 2,
+  };
+};
+
 const boundsIntersect = (a, b) => {
   if (!a || !b) {
     return false;
@@ -78,8 +104,13 @@ const getActiveWritingArea = (strokes, analyzer, expansionRadius = 100) => {
   // Merge all bounds to get the active area
   const mergedBounds = mergeBounds(bounds);
   
-  // Expand the area slightly to capture context
-  return expandBounds(mergedBounds, expansionRadius);
+  // Expand horizontally more than vertically (equations are typically horizontal)
+  // Use 2.5x horizontal expansion for typical equation layout
+  return expandBoundsAnisotropic(
+    mergedBounds, 
+    expansionRadius * 2.5,  // Horizontal: wider to catch all parts of equation
+    expansionRadius         // Vertical: standard
+  );
 };
 
 const HandwritingDetector = ({
@@ -324,7 +355,8 @@ const HandwritingDetector = ({
     }
 
     // Calculate the active writing area - this is where the user just drew
-    const activeArea = getActiveWritingArea(activeStrokes, analyzer, 30);
+    // Use larger expansion to ensure we capture all parts of equations
+    const activeArea = getActiveWritingArea(activeStrokes, analyzer, 50);
     
     if (!activeArea) {
       if (lastSignatureRef.current !== null) {
@@ -337,13 +369,28 @@ const HandwritingDetector = ({
     }
 
     // Dynamic detection radius based on the size of what user drew
-    // Larger drawings get wider context, smaller drawings stay focused
-    const primaryDimension = Math.max(activeArea.width, activeArea.height);
-    const baseRadius = Math.max(primaryDimension * 0.6, 60); // At least 60px, or 60% of drawing size
-    const dynamicRadius = Math.min(baseRadius, 150); // Cap at 150px to avoid conflicts
+    // Favor horizontal expansion since equations are typically written horizontally
+    const horizontalSpan = activeArea.width;
+    const verticalSpan = activeArea.height;
     
-    // Expand active area to include nearby context (smaller expansion)
-    const expandedActiveArea = expandBounds(activeArea, dynamicRadius * 0.3);    // Only look at strokes within the expanded active area
+    // Base radius calculation - favor the dimension that's larger
+    // But ensure we expand more horizontally even for square/vertical content
+    const baseHorizontalRadius = Math.max(horizontalSpan * 0.8, 80); // At least 80px horizontal
+    const baseVerticalRadius = Math.max(verticalSpan * 0.6, 40);     // At least 40px vertical
+    
+    // Cap to avoid conflicts with other equations
+    const horizontalRadius = Math.min(baseHorizontalRadius, 200);
+    const verticalRadius = Math.min(baseVerticalRadius, 100);
+    
+    // Use the larger of the two for the context search radius
+    const dynamicRadius = Math.max(horizontalRadius, verticalRadius * 1.5);
+    
+    // Expand active area to include nearby context with anisotropic expansion
+    const expandedActiveArea = expandBoundsAnisotropic(
+      activeArea, 
+      horizontalRadius * 0.5,  // Expand 50% of horizontal radius on each side
+      verticalRadius * 0.4     // Expand 40% of vertical radius on each side
+    );    // Only look at strokes within the expanded active area
     // This ensures we only detect equations in the region user is currently writing
     const focusedStrokes = allStrokes.filter((stroke) => {
       const strokeBounds = getStrokeBounds(stroke, analyzer);
