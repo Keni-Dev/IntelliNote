@@ -238,7 +238,14 @@ export class PerfectFreehandBrush extends fabric.BaseBrush {
         createdAt,
         points: strokePoints,
       });
-      this.canvas.add(path);
+      
+      // PERFORMANCE: Add to virtual engine if available, otherwise add to canvas directly
+      if (this.canvas.virtualEngine) {
+        this.canvas.virtualEngine.addObject(path);
+      } else {
+        this.canvas.add(path);
+      }
+      
       this.canvas.requestRenderAll();
       this.canvas.fire('path:created', {
         path,

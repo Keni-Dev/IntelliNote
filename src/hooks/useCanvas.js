@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
 import { PressureBrush, loadPenPreferences, savePenPreferences } from '../lib/pressureBrush';
 import PerfectFreehandBrush from '../lib/PerfectFreehandBrush';
+import { VirtualCanvasEngine } from '../lib/VirtualCanvasEngine';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
@@ -40,6 +41,10 @@ export const useCanvas = ({ canvasId, initialData, hostRef }) => {
   const shapeHandlersRef = useRef({ down: null, move: null, up: null });
   const hostElementRef = useRef(null);
   const canvasElementRef = useRef(null);
+  
+  // Virtual Canvas Engine for high-performance rendering
+  const virtualEngineRef = useRef(null);
+  const [virtualEngine, setVirtualEngine] = useState(null);
   
   // Pen/Stylus settings
   const [penSettings, setPenSettings] = useState(() => normalizePenSettings(loadPenPreferences()));
@@ -103,7 +108,7 @@ export const useCanvas = ({ canvasId, initialData, hostRef }) => {
           width: window.innerWidth,
           height: window.innerHeight - 64, // Subtract navbar height
           enableRetinaScaling: true,
-          renderOnAddRemove: false, // Don't auto-render on every object add/remove - we'll batch
+          renderOnAddRemove: false, // Virtual engine handles rendering
           skipTargetFind: false,
           perPixelTargetFind: false, // Disable expensive per-pixel hit detection for better performance
           stopContextMenu: true,
@@ -116,17 +121,29 @@ export const useCanvas = ({ canvasId, initialData, hostRef }) => {
           noScaleCache: false,
         });
 
+        // Initialize Virtual Canvas Engine for ultra-high performance
+        const engine = new VirtualCanvasEngine(canvas, {
+          cellSize: 512,              // Grid cell size for spatial indexing
+          maxVisibleObjects: 2000,    // Max objects rendered at once
+          renderThrottle: 16,         // ~60fps render throttle
+          enableLOD: true,            // Enable Level of Detail optimization
+          lodHigh: 1.0,               // Full detail above 100% zoom
+          lodMedium: 0.5,             // Medium detail 50-100% zoom
+          lodLow: 0.25                // Low detail below 25% zoom
+        });
+        
+        virtualEngineRef.current = engine;
+        setVirtualEngine(engine);
+
         // Ensure Fabric recalculates element offset for accurate pointer mapping
         canvas.calcOffset();
 
         // Disable default touch actions on interactive layers to avoid browser gestures
         if (canvas.upperCanvasEl) {
           canvas.upperCanvasEl.style.touchAction = 'none';
-          canvas.upperCanvasEl.style.zIndex = '2'; // Upper canvas (drawing overlay) on top
         }
         if (canvas.lowerCanvasEl) {
           canvas.lowerCanvasEl.style.touchAction = 'none';
-          canvas.lowerCanvasEl.style.zIndex = '1'; // Lower canvas (objects) above grid
         }
 
         if (isCancelled) {
@@ -188,6 +205,16 @@ export const useCanvas = ({ canvasId, initialData, hostRef }) => {
             // Guard against unmount during async load and use promise API to avoid callback timing issues
             try {
               await canvas.loadFromJSON(data);
+              
+              // Add loaded objects to virtual engine
+              const loadedObjects = canvas.getObjects();
+              if (engine && loadedObjects.length > 0) {
+                // Remove objects from canvas (virtual engine will manage them)
+                canvas.remove(...loadedObjects);
+                // Add to virtual engine
+                engine.addObjects(loadedObjects);
+              }
+              
               canvas.renderAll();
             } catch (error) {
               console.error('Error loading canvas data:', error);
@@ -270,6 +297,12 @@ export const useCanvas = ({ canvasId, initialData, hostRef }) => {
       if (resizeHandlerRef.current) {
         window.removeEventListener('resize', resizeHandlerRef.current);
         resizeHandlerRef.current = null;
+      }
+
+      // Dispose virtual engine first
+      if (virtualEngineRef.current) {
+        virtualEngineRef.current.dispose();
+        virtualEngineRef.current = null;
       }
 
       if (canvasRef.current) {
@@ -714,6 +747,7 @@ export const useCanvas = ({ canvasId, initialData, hostRef }) => {
 
   return {
     canvas: canvasInstance,
+    virtualEngine,
     isLoading,
     zoom,
     panOffset,

@@ -2,14 +2,9 @@ import { useCallback, useEffect, useRef } from 'react';
 import PropTypes from 'prop-types';
 import * as fabric from 'fabric';
 import StrokeAnalyzer, { mergeBounds } from '../../lib/strokeAnalyzer';
-import {
-  detectEqualsSign,
-  recognizeEquation,
-  recognizeEquationHybrid,
-  getContextArea,
-} from '../../lib/handwritingOCR';
-import { createStrokeSignature, getOCRConfig } from '../../config/ocr';
-import { analyzeMathContent } from '../../lib/mathDetection';
+import { detectMostRecentEqualSign } from '../../lib/equalSignDetection';
+import { createStrokeSignature } from '../../config/ocr';
+import { strokeDebugger } from '../../lib/strokeDebugger';
 
 const DEBUG_COLORS = ['#3b82f6', '#22c55e', '#f97316', '#ec4899'];
 
@@ -135,10 +130,14 @@ const HandwritingDetector = ({
   const debugOverlayRef = useRef([]);
   const cloudTaskRef = useRef({ callId: 0, signature: null });
   const requestCounterRef = useRef(0);
+  const lastProcessTimeRef = useRef(0); // PERFORMANCE: Track last process time
+  const processingRef = useRef(false); // PERFORMANCE: Prevent concurrent processing
+  
   const MAX_STROKES_FOR_AUTOMATIC_DETECTION = 120;
   const MAX_WORKING_STROKES = 64;
   const MAX_CONTEXT_STROKES = 48;
   const MIN_ACTIVE_STROKES = 3;
+  const MIN_PROCESS_INTERVAL = 300; // PERFORMANCE: Min 300ms between detections
 
   useEffect(() => {
     analyzerRef.current.debug = debug;
@@ -307,6 +306,28 @@ const HandwritingDetector = ({
       return;
     }
 
+    // PERFORMANCE: Prevent concurrent processing
+    if (processingRef.current) {
+      return;
+    }
+
+    // PERFORMANCE: Throttle detection frequency
+    const now = Date.now();
+    const timeSinceLastProcess = now - lastProcessTimeRef.current;
+    if (timeSinceLastProcess < MIN_PROCESS_INTERVAL) {
+      // Schedule for later instead of processing immediately
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+      timerRef.current = setTimeout(() => {
+        processDetection();
+      }, MIN_PROCESS_INTERVAL - timeSinceLastProcess);
+      return;
+    }
+
+    processingRef.current = true;
+    lastProcessTimeRef.current = now;
+
     const allStrokes = strokesRef.current;
     if (!allStrokes.length) {
       if (lastSignatureRef.current !== null) {
@@ -315,10 +336,10 @@ const HandwritingDetector = ({
         notifyCandidate(null);
       }
       cancelCloudRequests();
+      processingRef.current = false;
       return;
     }
 
-    const now = Date.now();
     const ACTIVE_WRITING_WINDOW = 5000; // Last 5 seconds
 
     const newestStroke = allStrokes[allStrokes.length - 1] || null;
@@ -332,6 +353,7 @@ const HandwritingDetector = ({
         notifyCandidate(null);
       }
       cancelCloudRequests();
+      processingRef.current = false;
       return;
     }
 
@@ -351,6 +373,7 @@ const HandwritingDetector = ({
         notifyCandidate(null);
       }
       cancelCloudRequests();
+      processingRef.current = false;
       return;
     }
 
@@ -365,6 +388,7 @@ const HandwritingDetector = ({
         notifyCandidate(null);
       }
       cancelCloudRequests();
+      processingRef.current = false;
       return;
     }
 
@@ -462,162 +486,67 @@ const HandwritingDetector = ({
         notifyCandidate(null);
       }
       cancelCloudRequests();
+      processingRef.current = false;
       return;
     }
 
     // Limit to most recent strokes in the focused area for performance
     const workingStrokes = focusedStrokes.slice(-MAX_WORKING_STROKES);
 
-    const equalsCandidate = detectEqualsSign(workingStrokes, { analyzer });
-
-    let focusPosition = equalsCandidate?.position || null;
-    if (!focusPosition && workingStrokes.length) {
-      const lastStroke = workingStrokes[workingStrokes.length - 1];
-      if (lastStroke) {
-        const inspectedBounds = lastStroke.bounds
-          || lastStroke.features?.bounds
-          || analyzer.analyzeStroke(lastStroke.points || lastStroke.strokePoints || []).bounds;
-        if (inspectedBounds) {
-          focusPosition = { x: inspectedBounds.centerX, y: inspectedBounds.centerY };
-        }
-      }
+    // STAGE 1: ONLY detect equals sign first - don't run full OCR yet
+    // Use the new grouping detection to find the MOST RECENT equal sign only
+    // This prevents multiple equal signs from being detected as one
+    const equalsCandidate = detectMostRecentEqualSign(workingStrokes, { analyzer, minConfidence: 0.55, debug });
+    
+    // Debug the detection if enabled
+    if (debug) {
+      strokeDebugger.debugStrokes(equalsCandidate?.strokes || workingStrokes.slice(-2), canvas, equalsCandidate);
     }
-
-    // Get context strokes around the focus position within the dynamic radius
-    let contextStrokes = focusPosition
-      ? getContextArea(workingStrokes, focusPosition, dynamicRadius, { analyzer })
-      : [];
-
-    // If no context found with focus position, use all working strokes
-    if (!contextStrokes.length) {
-      contextStrokes = workingStrokes;
-    }
-
-    // Limit context strokes for performance
-    if (contextStrokes.length > MAX_CONTEXT_STROKES) {
-      contextStrokes = contextStrokes.slice(-MAX_CONTEXT_STROKES);
-    }
-
-    if (!contextStrokes.length) {
+    
+    // Only proceed if we have a STRONG equals sign detection
+    if (!equalsCandidate || equalsCandidate.confidence < 0.55) {
       if (lastSignatureRef.current !== null) {
         lastSignatureRef.current = null;
         releaseFeedback();
         notifyCandidate(null);
       }
       cancelCloudRequests();
+      processingRef.current = false;
       return;
     }
 
-    const recognition = recognizeEquation(contextStrokes, {
-      analyzer,
-      maxGroupDistance,
+    // Calculate bounds around the equals sign
+    const equalsBounds = equalsCandidate.bounds;
+    
+    // Expand to capture full equation context
+    const expandedBounds = expandBounds(equalsBounds, dynamicRadius * 1.2);
+    
+    // Get strokes within expanded bounds (for the full equation context)
+    const equationStrokes = allStrokes.filter((stroke) => {
+      const strokeBounds = getStrokeBounds(stroke, analyzer);
+      if (!strokeBounds) return false;
+      return boundsIntersect(strokeBounds, expandedBounds);
     });
 
-    updateDebugOverlays(recognition.groups, activeArea);
+    updateDebugOverlays([], activeArea);
 
-    const trimmed = (recognition.equation || '').trim();
-    const fallbackEquation = trimmed || (equalsCandidate ? '=' : '');
-    const analysis = analyzeMathContent(fallbackEquation);
+    // Validate minimum bounds size
+    // Allow wider equations (horizontal) by checking width OR height separately
+    const MIN_BOX_AREA = 200; // Reduced from 400 to allow smaller detections
+    const MIN_BOX_WIDTH = 10; // Reduced from 15 for smaller equations
+    const MIN_BOX_HEIGHT = 5;  // Reduced from 10 for smaller equations
+    const MAX_ASPECT_RATIO = 30; // Allow very wide horizontal equations (e.g., 300×10px)
+    
+    const aspectRatio = expandedBounds ? expandedBounds.width / Math.max(1, expandedBounds.height) : 0;
+    const hasValidBounds = expandedBounds && 
+      expandedBounds.width > MIN_BOX_WIDTH && 
+      expandedBounds.height > MIN_BOX_HEIGHT &&
+      (
+        // Either meets area requirement OR is a valid wide equation
+        (expandedBounds.width * expandedBounds.height) >= MIN_BOX_AREA ||
+        (aspectRatio > 2 && aspectRatio <= MAX_ASPECT_RATIO && expandedBounds.width > 30)
+      );
 
-    const config = getOCRConfig();
-    const mode = (config.mode || 'hybrid').toLowerCase();
-    const threshold = config.minConfidence ?? 0.7;
-
-    const rawLocalConfidence = recognition.confidence > 0
-      ? recognition.confidence
-      : equalsCandidate?.confidence ?? 0;
-    const localConfidence = Math.max(0, Math.min(1, rawLocalConfidence));
-    const shouldEscalate = mode === 'cloud' || (mode === 'hybrid' && rawLocalConfidence < threshold);
-    const hasMeaningfulContent = fallbackEquation.length > 0;
-
-    if (!hasMeaningfulContent && !shouldEscalate) {
-      if (lastSignatureRef.current !== null) {
-        lastSignatureRef.current = null;
-        releaseFeedback();
-        notifyCandidate(null);
-      }
-      cancelCloudRequests();
-      return;
-    }
-
-    const symbolBounds = recognition.symbols.length
-      ? recognition.symbols
-          .map((symbol) => symbol?.bounds)
-          .filter(Boolean)
-      : [];
-
-    const combinedSymbolBounds = symbolBounds.length
-      ? symbolBounds.reduce((acc, current) => {
-          if (!acc) {
-            return current;
-          }
-          return {
-            minX: Math.min(acc.minX, current.minX),
-            minY: Math.min(acc.minY, current.minY),
-            maxX: Math.max(acc.maxX, current.maxX),
-            maxY: Math.max(acc.maxY, current.maxY),
-            width: Math.max(acc.maxX, current.maxX) - Math.min(acc.minX, current.minX),
-            height: Math.max(acc.maxY, current.maxY) - Math.min(acc.minY, current.minY),
-            centerX: (Math.min(acc.minX, current.minX) + Math.max(acc.maxX, current.maxX)) / 2,
-            centerY: (Math.min(acc.minY, current.minY) + Math.max(acc.maxY, current.maxY)) / 2,
-          };
-        }, null)
-      : null;
-
-    const contextBounds = mergeBounds(contextStrokes.map((stroke) => getStrokeBounds(stroke, analyzer)).filter(Boolean));
-    const baseBounds = combinedSymbolBounds
-      || equalsCandidate?.bounds
-      || contextBounds;
-
-  const paddedBounds = expandBounds(baseBounds, Math.max(12, dynamicRadius * 0.4));
-
-    let primaryStrokes = contextStrokes;
-    if (paddedBounds) {
-      const filtered = contextStrokes.filter((stroke) => {
-        const strokeBounds = getStrokeBounds(stroke, analyzer);
-        if (!strokeBounds) {
-          return true;
-        }
-        return boundsIntersect(strokeBounds, paddedBounds);
-      });
-      if (filtered.length) {
-        primaryStrokes = filtered;
-      }
-    }
-
-    const strokesForProcessing = primaryStrokes.length ? primaryStrokes : contextStrokes;
-
-    const strokeSignature = createStrokeSignature(strokesForProcessing);
-    const fallbackSignature = strokesForProcessing
-      .map((stroke) => stroke.id || stroke.path?.data?.strokeMeta?.id || '')
-      .sort()
-      .join(',');
-    const signature = strokeSignature && strokeSignature !== 'empty'
-      ? strokeSignature
-      : `strokes::${fallbackSignature}`;
-
-    const previousPayload = lastPayloadRef.current;
-    const classificationChanged = previousPayload?.signature === signature
-      ? (previousPayload?.analysis?.isMathLike ?? false) !== (analysis.isMathLike ?? false)
-      : false;
-
-    if (lastSignatureRef.current !== signature || classificationChanged) {
-      lastSignatureRef.current = signature;
-      if (analysis.isMathLike || shouldEscalate) {
-        highlightStrokes(strokesForProcessing);
-      } else {
-        releaseFeedback();
-      }
-    }
-    const bounds = paddedBounds || baseBounds || contextBounds;
-
-    // Filter out tiny or invalid bounding boxes
-    const MIN_BOX_AREA = 100; // Minimum 10x10 pixels
-    const hasValidBounds = bounds && 
-      (bounds.width * bounds.height) >= MIN_BOX_AREA &&
-      bounds.width > 5 && bounds.height > 5;
-
-    // Don't create detection if bounds are too small or invalid
     if (!hasValidBounds) {
       if (lastSignatureRef.current !== null) {
         lastSignatureRef.current = null;
@@ -625,28 +554,51 @@ const HandwritingDetector = ({
         notifyCandidate(null);
       }
       cancelCloudRequests();
+      processingRef.current = false;
       return;
+    }
+    
+    // Create candidate payload with ONLY equals sign info (no OCR yet)
+    const strokeSignature = createStrokeSignature(equationStrokes);
+    const fallbackSignature = equationStrokes
+      .map((stroke) => stroke.id || stroke.path?.data?.strokeMeta?.id || '')
+      .sort()
+      .join(',');
+    const signature = strokeSignature && strokeSignature !== 'empty'
+      ? strokeSignature
+      : `strokes::${fallbackSignature}`;
+
+    const signatureChanged = lastSignatureRef.current !== signature;
+
+    if (signatureChanged) {
+      lastSignatureRef.current = signature;
+      highlightStrokes(equationStrokes);
     }
 
     const basePayload = {
-      equation: fallbackEquation,
-      latex: fallbackEquation,
-      confidence: localConfidence,
-      method: 'local',
-      mode,
-      loading: shouldEscalate,
-      strokes: strokesForProcessing,
-      bounds,
+      equation: '=', // Just the equals sign for now
+      latex: '=',
+      confidence: equalsCandidate.confidence,
+      method: 'equals-detected',
+      mode: 'local',
+      loading: false,
+      strokes: equationStrokes,
+      bounds: expandedBounds,
       equals: equalsCandidate,
-      groups: recognition.groups,
+      groups: [],
       releaseHighlight: releaseFeedback,
       signature,
-      localConfidence: recognition.confidence ?? null,
+      localConfidence: equalsCandidate.confidence,
       remoteConfidence: null,
-      threshold,
+      threshold: 0.55,
       timestamp: Date.now(),
-      analysis,
-      intent: analysis.isMathLike ? 'equation' : 'note',
+      analysis: {
+        classification: 'equation-candidate',
+        isMathLike: true,
+        confidence: equalsCandidate.confidence,
+        isEquation: true,
+      },
+      intent: 'equation-candidate', // New intent type - not a full equation yet
     };
 
     if (debug) {
@@ -655,94 +607,18 @@ const HandwritingDetector = ({
         activeStrokes: activeStrokes.length,
         focusedStrokes: focusedStrokes.length,
         workingStrokes: workingStrokes.length,
-        contextStrokes: contextStrokes.length,
+        equationStrokes: equationStrokes.length,
         hasActiveArea: !!activeArea,
         activeAreaSize: activeArea ? `${Math.round(activeArea.width)}x${Math.round(activeArea.height)}` : 'N/A',
         equalsCandidate: !!equalsCandidate,
         equalsConfidence: equalsCandidate?.confidence ?? 0,
-        recognized: recognition.equation,
-        symbolCount: recognition.symbols.length,
-        confidence: recognition.confidence,
-        mode,
-        shouldEscalate,
-        classification: analysis.classification,
       });
     }
 
     notifyCandidate(basePayload);
 
-    const callId = requestCounterRef.current + 1;
-    requestCounterRef.current = callId;
-    cloudTaskRef.current = { callId, signature };
-
-    recognizeEquationHybrid(strokesForProcessing, {
-      localResult: recognition,
-      signature,
-      includeHistory: true,
-      mode,
-      minConfidence: threshold,
-    })
-      .then((result) => {
-        if (cloudTaskRef.current.callId !== callId || cloudTaskRef.current.signature !== signature) {
-          return;
-        }
-        if (!result) {
-          if (shouldEscalate) {
-            notifyCandidate({
-              ...basePayload,
-              loading: false,
-              method: 'cloud-error',
-              error: 'Cloud OCR returned no result.',
-            });
-          }
-          return;
-        }
-
-  const remoteEquationRaw = (result.equation || result.latex || fallbackEquation || '').trim();
-        const remoteEquation = remoteEquationRaw || fallbackEquation;
-        const remoteConfidence = Math.max(0, Math.min(1, result.confidence ?? localConfidence));
-        const remoteMethod = result.method || (result.shouldUseRemote ? 'cloud' : 'local');
-        const remoteAnalysis = analyzeMathContent(remoteEquation);
-
-        const resolvedPayload = {
-          ...basePayload,
-          equation: remoteEquation,
-          latex: result.latex ?? remoteEquation,
-          confidence: remoteConfidence,
-          method: remoteMethod,
-          loading: false,
-          remoteConfidence: result.remote?.confidence ?? result.confidence ?? null,
-          remote: result.remote,
-          ocrResult: result,
-          mode: result.mode || mode,
-          threshold: result.threshold ?? threshold,
-          error: result.error ? (result.error.message || String(result.error)) : null,
-          analysis: remoteAnalysis,
-          intent: remoteAnalysis.isMathLike ? 'equation' : 'note',
-        };
-
-        const meaningfulChange = resolvedPayload.method !== basePayload.method
-          || resolvedPayload.loading !== basePayload.loading
-          || resolvedPayload.equation !== basePayload.equation
-          || Math.abs(resolvedPayload.confidence - basePayload.confidence) > 0.0001
-          || (resolvedPayload.analysis?.classification !== basePayload.analysis?.classification)
-          || resolvedPayload.error;
-
-        if (meaningfulChange) {
-          notifyCandidate(resolvedPayload);
-        }
-      })
-      .catch((error) => {
-        if (cloudTaskRef.current.callId !== callId || cloudTaskRef.current.signature !== signature) {
-          return;
-        }
-        notifyCandidate({
-          ...basePayload,
-          loading: false,
-          method: shouldEscalate ? 'cloud-error' : 'local-error',
-          error: error?.message || 'OCR failed.',
-        });
-      });
+    // PERFORMANCE: Mark processing complete
+    processingRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvas, cancelCloudRequests, contextRadius, debug, highlightStrokes, maxGroupDistance, notifyCandidate, recentWindowMs, activeWritingWindowMs, releaseFeedback, updateDebugOverlays]);
 

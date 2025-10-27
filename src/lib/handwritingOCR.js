@@ -1,4 +1,5 @@
-import StrokeAnalyzer, { mergeBounds } from './strokeAnalyzer';
+import StrokeAnalyzer from './strokeAnalyzer';
+import { detectEqualSign as detectEqualSignRobust } from './equalSignDetection';
 import {
   getOCRConfig,
   getOCRCache,
@@ -314,111 +315,12 @@ export const extractStrokes = (source, startTime, endTime, options = {}) => {
     .filter(Boolean);
 };
 
-const isReasonablyHorizontal = (stroke) => {
-  if (!stroke) {
-    return false;
-  }
-
-  const feature = stroke.features;
-  const bounds = feature?.bounds || stroke.bounds;
-
-  if (!feature || !bounds) {
-    return false;
-  }
-
-  // Ignore very small marks that are unlikely to form "=" lines
-  if (Math.max(bounds.width, bounds.height) < 8) {
-    return false;
-  }
-
-  const straightness = feature.straightness ?? (1 - (feature.curvature ?? 0));
-  const horizontalAlignment = Math.abs(Math.sin(feature.angle ?? 0));
-  const aspect = bounds.height / Math.max(bounds.width, 1);
-
-  // Treat it as horizontal if it was already classified that way
-  if (feature.shape === 'line' && feature.direction === 'horizontal') {
-    return true;
-  }
-
-  // Otherwise allow slightly imperfect lines that are mostly horizontal
-  const straightEnough = straightness >= 0.35;
-  const flatEnough = aspect <= 0.45;
-  const angleOk = horizontalAlignment <= 0.55;
-
-  return straightEnough && flatEnough && angleOk;
-};
-
 export const detectEqualsSign = (strokes, options = {}) => {
-  const analyzer = options.analyzer || new StrokeAnalyzer(options);
-  const prepared = (Array.isArray(strokes) ? strokes : [])
-    .map((stroke) => ensureStroke(stroke, analyzer))
-    .filter(Boolean);
-
-  if (prepared.length < 2) {
-    return null;
-  }
-
-  const horizontalLines = prepared.filter(isReasonablyHorizontal);
-
-  if (horizontalLines.length < 2) {
-    return null;
-  }
-
-  let bestPair = null;
-  let bestScore = 0;
-
-  for (let i = 0; i < horizontalLines.length - 1; i += 1) {
-    for (let j = i + 1; j < horizontalLines.length; j += 1) {
-      const a = horizontalLines[i];
-      const b = horizontalLines[j];
-      const gap = Math.abs(a.bounds.centerY - b.bounds.centerY);
-      const overlap = Math.min(a.bounds.maxX, b.bounds.maxX) - Math.max(a.bounds.minX, b.bounds.minX);
-      const alignment = Math.abs(a.bounds.centerX - b.bounds.centerX);
-
-      // CRITICAL: For a real "=" sign, the gap should be small (3-25px typically)
-      // and the lines must have good horizontal overlap
-      // This prevents false positives from "+" signs pairing with "=" lines
-      if (gap < 3 || gap > 25) {
-        continue; // Skip pairs that are too close or too far apart
-      }
-
-      if (overlap < Math.max(a.bounds.width, b.bounds.width) * 0.3) {
-        continue; // Skip pairs with poor horizontal overlap (< 30%)
-      }
-
-      // Score the gap: accept 3-25px range, best score at 8-15px
-      const gapScore = gap >= 3 && gap <= 25
-        ? (gap <= 15 ? 1.0 - Math.abs(gap - 10) / 10 : 1.0 - (gap - 15) / 10)
-        : 0;
-      
-      const overlapScore = clamp01(overlap / Math.max(a.bounds.width, b.bounds.width, 1));
-      const alignmentScore = Math.max(0, 1 - alignment / Math.max(a.bounds.width, b.bounds.width, 1));
-      const linearity = (a.features.straightness + b.features.straightness) / 2;
-
-      const score = clamp01(0.2 + 0.8 * gapScore * overlapScore * alignmentScore * linearity);
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestPair = [a, b];
-      }
-    }
-  }
-
-  const minConfidence = options.minConfidence ?? 0.35;
-
-  if (!bestPair || bestScore < minConfidence) {
-    return null;
-  }
-
-  const bounds = mergeBounds(bestPair.map((stroke) => stroke.bounds));
-  const result = {
-    strokes: bestPair,
-    bounds,
-    position: { x: bounds.centerX, y: bounds.centerY },
-    confidence: bestScore,
-  };
-  
-  return result;
+  // Use the new robust detection system
+  return detectEqualSignRobust(strokes, {
+    ...options,
+    debug: options.debug || false,
+  });
 };
 
 const recognizeEquationLocal = (strokes, options = {}) => {

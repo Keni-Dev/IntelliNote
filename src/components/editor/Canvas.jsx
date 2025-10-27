@@ -9,6 +9,7 @@ import { autoOptimizeCanvas, throttle } from '../../lib/canvasOptimizer';
 import { buildContextFromArea } from '../../lib/spatialContext';
 import { generateHandwriting, renderHandwritingToCanvas } from '../../lib/handwritingSynthesis';
 import { getOCRConfig } from '../../config/ocr';
+import { strokeDebugger } from '../../lib/strokeDebugger';
 // Use solver via hook to keep a single engine instance shared with the VariablePanel
 import Toolbar from './Toolbar';
 import GridBackground from './GridBackground';
@@ -561,11 +562,17 @@ const Canvas = forwardRef(({
       } catch (error) {
         console.warn('Unable to persist handwriting debug preference:', error);
       }
+      // Toggle the stroke debugger
+      if (next) {
+        strokeDebugger.enable();
+      } else {
+        strokeDebugger.disable();
+      }
       return next;
     });
   }, []);
 
-  const handleAdjustRegion = useCallback(() => {
+  const handleAdjustRegion = useCallback(async () => {
     if (!handwritingSuggestion?.bounds) return;
     
     setResizableBoxBounds(handwritingSuggestion.bounds);
@@ -595,52 +602,83 @@ const Canvas = forwardRef(({
         return;
       }
       
-      // Re-run OCR with the adjusted strokes
+      // Update bounds and strokes without re-running detection yet
       setHandwritingSuggestion((prev) => ({
         ...prev,
-        loading: true,
         bounds: adjustedBounds,
         strokes: adjustedStrokes,
       }));
-      
-      // Import and run recognition
+    };
+  }, [handwritingSuggestion]);
+
+  const handleRecognizeEquation = useCallback(async () => {
+    if (!handwritingSuggestion || !canvas) return;
+    
+    const strokes = handwritingSuggestion.strokes || [];
+    const bounds = handwritingSuggestion.bounds;
+    
+    if (!strokes.length || !bounds) {
+      console.warn('[RecognizeEquation] No strokes or bounds available');
+      setHandwritingSuggestion(prev => ({
+        ...prev,
+        error: 'No content to recognize. Please adjust the detection box to include your handwriting.'
+      }));
+      return;
+    }
+    
+    console.log('[RecognizeEquation] Processing', strokes.length, 'strokes in bounds:', bounds);
+    
+    // Show loading state
+    setHandwritingSuggestion(prev => ({
+      ...prev,
+      loading: true,
+      intent: 'recognizing',
+      error: null
+    }));
+    
+    try {
+      // NOW send to Python server (or OpenRouter)
       const { recognizeEquationHybrid } = await import('../../lib/handwritingOCR');
       const { createStrokeSignature, getOCRConfig } = await import('../../config/ocr');
       const { analyzeMathContent } = await import('../../lib/mathDetection');
       
-      const signature = createStrokeSignature(adjustedStrokes);
+      const signature = createStrokeSignature(strokes);
       const config = getOCRConfig();
       
-      try {
-        const result = await recognizeEquationHybrid(adjustedStrokes, {
-          signature,
-          includeHistory: true,
-          mode: config.mode,
-          minConfidence: config.minConfidence,
-        });
-        
-        const equation = (result.equation || result.latex || '').trim();
-        const analysis = analyzeMathContent(equation);
-        
-        setHandwritingSuggestion((prev) => ({
-          ...prev,
-          equation,
-          latex: result.latex || equation,
-          confidence: result.confidence || 0,
-          method: result.method || 'local',
-          loading: false,
-          analysis,
-          intent: analysis.isMathLike ? 'equation' : 'note',
-        }));
-      } catch (error) {
-        setHandwritingSuggestion((prev) => ({
-          ...prev,
-          loading: false,
-          error: error.message || 'Re-detection failed',
-        }));
-      }
-    };
-  }, [handwritingSuggestion]);
+      console.log('[RecognizeEquation] Sending', strokes.length, 'strokes with bounds:', bounds);
+      
+      const result = await recognizeEquationHybrid(strokes, {
+        signature,
+        includeHistory: true,
+        mode: config.mode,
+        minConfidence: config.minConfidence,
+        bounds, // Pass bounds to clip strokes to the detection area
+      });
+      
+      const equation = (result.equation || result.latex || '').trim();
+      const analysis = analyzeMathContent(equation);
+      
+      // Update suggestion with OCR result
+      setHandwritingSuggestion(prev => ({
+        ...prev,
+        equation,
+        latex: result.latex || equation,
+        confidence: result.confidence || 0,
+        method: result.method || 'local',
+        loading: false,
+        analysis,
+        intent: 'equation', // Now it's a recognized equation
+      }));
+      
+    } catch (error) {
+      console.error('Recognition failed:', error);
+      setHandwritingSuggestion(prev => ({
+        ...prev,
+        loading: false,
+        error: error.message || 'Recognition failed'
+      }));
+    }
+  }, [handwritingSuggestion, canvas]);
 
   const handleCancelResizableBox = useCallback(() => {
     setShowResizableBox(false);
@@ -649,11 +687,62 @@ const Canvas = forwardRef(({
   }, []);
 
   const handleConfirmResizableBox = useCallback((adjustedBounds) => {
-    if (resizableBoxCallbackRef.current) {
-      resizableBoxCallbackRef.current(adjustedBounds);
-      resizableBoxCallbackRef.current = null;
+    if (!canvas || !handwritingSuggestion) return;
+    
+    // Get strokes from strokesRef instead of canvas objects
+    const allStrokes = strokesRef.current || [];
+    
+    // Helper to check if stroke intersects with bounds
+    const strokeIntersectsBounds = (stroke, bounds) => {
+      // Get bounds from stroke metadata
+      const strokeBounds = stroke?.bounds || stroke?.features?.bounds;
+      
+      if (!strokeBounds) {
+        console.warn('[ResizeBox] Stroke missing bounds:', stroke.id);
+        return false;
+      }
+      
+      // Check intersection
+      const intersects = !(
+        strokeBounds.maxX < bounds.minX ||
+        strokeBounds.minX > bounds.maxX ||
+        strokeBounds.maxY < bounds.minY ||
+        strokeBounds.minY > bounds.maxY
+      );
+      
+      return intersects;
+    };
+    
+    // Filter strokes within the adjusted bounds
+    const strokesInBounds = allStrokes.filter(stroke => 
+      strokeIntersectsBounds(stroke, adjustedBounds)
+    );
+    
+    console.log('[ResizeBox] Adjusted bounds:', adjustedBounds);
+    console.log('[ResizeBox] Total strokes in strokesRef:', allStrokes.length);
+    console.log('[ResizeBox] Found', strokesInBounds.length, 'strokes in new bounds');
+    
+    // Debug: log first few strokes to see their bounds
+    if (strokesInBounds.length === 0 && allStrokes.length > 0) {
+      console.log('[ResizeBox] Sample stroke bounds:', 
+        allStrokes.slice(0, 3).map(s => ({ id: s.id, bounds: s?.bounds || s?.features?.bounds }))
+      );
     }
-  }, []);
+    
+    // Update the handwriting suggestion with new strokes and bounds
+    setHandwritingSuggestion(prev => ({
+      ...prev,
+      strokes: strokesInBounds,
+      bounds: adjustedBounds,
+    }));
+    
+    // Close the resizable box
+    setShowResizableBox(false);
+    setResizableBoxBounds(null);
+    
+    // Clear the callback ref - we've already done the update above
+    resizableBoxCallbackRef.current = null;
+  }, [canvas, handwritingSuggestion]);
 
   // Handle handwriting candidate from HandwritingDetector
   const handleHandwritingCandidate = useCallback((candidate) => {
@@ -672,8 +761,8 @@ const Canvas = forwardRef(({
       return;
     }
 
-    // Only show equation candidates
-    if (candidate.intent !== 'equation') {
+    // Show both equation-candidate (equals sign detected) and equation (recognized)
+    if (candidate.intent !== 'equation-candidate' && candidate.intent !== 'equation') {
       setHandwritingSuggestion(null);
       if (releaseHighlightRef.current) {
         releaseHighlightRef.current();
@@ -2350,6 +2439,15 @@ const Canvas = forwardRef(({
         shadow: 'rgba(239, 68, 68, 0.25)',
       };
     }
+    // equation-candidate intent: purple (equals sign detected, not recognized yet)
+    if (intent === 'equation-candidate') {
+      return {
+        border: 'rgba(168, 85, 247, 0.9)', // purple
+        fill: 'rgba(168, 85, 247, 0.10)',
+        badge: 'rgba(147, 51, 234, 0.95)',
+        shadow: 'rgba(168, 85, 247, 0.25)',
+      };
+    }
     // Equation intent: blue
     return {
       border: 'rgba(59, 130, 246, 0.9)',
@@ -2409,7 +2507,14 @@ const Canvas = forwardRef(({
             className="absolute -top-7 left-1 flex items-center gap-2 rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white shadow-lg"
             style={{ backgroundColor: activeHighlightPalette.badge }}
           >
-            <span>{handwritingSuggestion.intent === 'note' ? 'Not an equation' : (handwritingSuggestion.analysis?.classification || 'Equation')}</span>
+            <span>
+              {handwritingSuggestion.intent === 'note' 
+                ? 'Not an equation' 
+                : handwritingSuggestion.intent === 'equation-candidate'
+                  ? 'Equation (=)'
+                  : (handwritingSuggestion.analysis?.classification || 'Equation')
+              }
+            </span>
             {typeof handwritingSuggestion.confidence === 'number' && (
               <span>{formatConfidenceText(handwritingSuggestion.confidence)}</span>
             )}
@@ -2501,7 +2606,12 @@ const Canvas = forwardRef(({
             <div className="space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <p className="text-sm font-semibold text-gray-800">
-                  {handwritingSuggestion.loading ? 'Detecting...' : 'Handwriting detected'}
+                  {handwritingSuggestion.loading 
+                    ? 'Recognizing...' 
+                    : handwritingSuggestion.intent === 'equation-candidate'
+                      ? 'Equation detected'
+                      : 'Handwriting detected'
+                  }
                 </p>
                 {handwritingSuggestion.loading ? (
                   <span className="inline-flex items-center gap-1 text-[11px] text-blue-600">
@@ -2509,13 +2619,13 @@ const Canvas = forwardRef(({
                     <span>Recognizing…</span>
                   </span>
                 ) : (
-                  handwritingSuggestion.method && (
+                  handwritingSuggestion.method && handwritingSuggestion.intent !== 'equation-candidate' && (
                     <span className={`inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${getMethodChipClass(handwritingSuggestion.method)}`}>
                       {formatMethodLabel(handwritingSuggestion.method)}
                     </span>
                   )
                 )}
-                {handwritingSuggestion.analysis && !handwritingSuggestion.loading && (
+                {handwritingSuggestion.analysis && !handwritingSuggestion.loading && handwritingSuggestion.intent !== 'equation-candidate' && (
                   <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">
                     {handwritingSuggestion.analysis.classification || 'unknown'}
                     {handwritingSuggestion.analysis.confidence != null && (
@@ -2524,25 +2634,33 @@ const Canvas = forwardRef(({
                   </span>
                 )}
               </div>
-              <p className="text-xs text-gray-600">
-                {handwritingSuggestion.intent === 'note' ? 'Text:' : 'Equation:'}{' '}
-                <span className="font-mono text-sm text-gray-900 break-all">
-                  {handwritingSuggestion.equation && handwritingSuggestion.equation.trim().length
-                    ? handwritingSuggestion.equation
-                    : handwritingSuggestion.loading
-                      ? 'Recognizing…'
-                      : '(none)'}
-                </span>
-              </p>
-              <p className="text-xs text-gray-500">
-                Confidence: {formatConfidenceText(handwritingSuggestion.confidence)}
-                {handwritingSuggestion.remoteConfidence != null && (
-                  <span className="ml-2">
-                    Cloud: {formatConfidenceText(handwritingSuggestion.remoteConfidence)}
-                  </span>
-                )}
-              </p>
-              {handwritingSuggestion.mode && (
+              {handwritingSuggestion.intent === 'equation-candidate' ? (
+                <p className="text-xs text-purple-600 font-medium">
+                  Equals sign detected. Click "Recognize Equation" to convert to text.
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-gray-600">
+                    {handwritingSuggestion.intent === 'note' ? 'Text:' : 'Equation:'}{' '}
+                    <span className="font-mono text-sm text-gray-900 break-all">
+                      {handwritingSuggestion.equation && handwritingSuggestion.equation.trim().length
+                        ? handwritingSuggestion.equation
+                        : handwritingSuggestion.loading
+                          ? 'Recognizing…'
+                          : '(none)'}
+                    </span>
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Confidence: {formatConfidenceText(handwritingSuggestion.confidence)}
+                    {handwritingSuggestion.remoteConfidence != null && (
+                      <span className="ml-2">
+                        Cloud: {formatConfidenceText(handwritingSuggestion.remoteConfidence)}
+                      </span>
+                    )}
+                  </p>
+                </>
+              )}
+              {handwritingSuggestion.mode && handwritingSuggestion.intent !== 'equation-candidate' && (
                 <p className="text-xs text-gray-400">
                   OCR mode: {handwritingSuggestion.mode}
                   {handwritingSuggestion.threshold != null && (
@@ -2573,37 +2691,71 @@ const Canvas = forwardRef(({
           </div>
 
           <div className="flex gap-2 mt-4">
-            <button
-              type="button"
-              onClick={handleHandwritingAccept}
-              className={`flex-1 px-3 py-2 text-sm font-semibold rounded-lg shadow transition-colors ${handwritingSuggestion.intent === 'note'
-                ? 'text-gray-500 bg-gray-200 cursor-not-allowed'
-                : 'text-white bg-blue-600 hover:bg-blue-500'}`}
-              disabled={handwritingSuggestion.intent === 'note'}
-              title={handwritingSuggestion.intent === 'note' ? 'No equation detected to solve' : 'Edit and solve this equation'}
-            >
-              {handwritingSuggestion.intent === 'note' ? 'Not an equation' : 'Edit & Solve'}
-            </button>
-            <button
-              type="button"
-              onClick={handleAdjustRegion}
-              className="px-3 py-2 text-sm font-semibold text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors border border-blue-200"
-              title="Adjust detection region"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={handleHandwritingDismiss}
-              className="px-3 py-2 text-sm font-semibold text-gray-600 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors"
-            >
-              Ignore
-            </button>
+            {handwritingSuggestion.intent === 'equation-candidate' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleRecognizeEquation}
+                  className="flex-1 px-3 py-2 text-sm font-semibold text-white bg-purple-600 hover:bg-purple-500 rounded-lg shadow transition-colors"
+                  disabled={handwritingSuggestion.loading}
+                  title="Recognize and convert to text"
+                >
+                  ✨ Recognize Equation
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAdjustRegion}
+                  className="px-3 py-2 text-sm font-semibold text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors border border-purple-200"
+                  title="Adjust detection region"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleHandwritingDismiss}
+                  className="px-3 py-2 text-sm font-semibold text-gray-600 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors"
+                  title="Dismiss"
+                >
+                  ✕
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={handleHandwritingAccept}
+                  className={`flex-1 px-3 py-2 text-sm font-semibold rounded-lg shadow transition-colors ${handwritingSuggestion.intent === 'note'
+                    ? 'text-gray-500 bg-gray-200 cursor-not-allowed'
+                    : 'text-white bg-blue-600 hover:bg-blue-500'}`}
+                  disabled={handwritingSuggestion.intent === 'note'}
+                  title={handwritingSuggestion.intent === 'note' ? 'No equation detected to solve' : 'Edit and solve this equation'}
+                >
+                  {handwritingSuggestion.intent === 'note' ? 'Not an equation' : 'Edit & Solve'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAdjustRegion}
+                  className="px-3 py-2 text-sm font-semibold text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors border border-blue-200"
+                  title="Adjust detection region"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleHandwritingDismiss}
+                  className="px-3 py-2 text-sm font-semibold text-gray-600 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors"
+                >
+                  Ignore
+                </button>
+              </>
+            )}
           </div>
 
-          {handwritingSuggestion.intent !== 'note' && (
+          {handwritingSuggestion.intent !== 'note' && handwritingSuggestion.intent !== 'equation-candidate' && (
             <label className="mt-3 flex items-center gap-2 text-xs text-gray-600">
               <input
                 type="checkbox"

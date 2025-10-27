@@ -42,11 +42,9 @@ const Toolbar = ({
 }) => {
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const [isPenSettingsOpen, setIsPenSettingsOpen] = useState(false);
-  const [isBrushControlsOpen, setIsBrushControlsOpen] = useState(false);
   const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
   const [isShapesMenuOpen, setIsShapesMenuOpen] = useState(false);
   const [selectedShapeTool, setSelectedShapeTool] = useState('line');
-  const brushControlsRef = useRef(null);
   const shapesMenuRef = useRef(null);
 
   const pressureEnabled = penSettings?.pressureSensitivity ?? true;
@@ -220,6 +218,7 @@ const Toolbar = ({
         </svg>
       ),
       shortcut: 'P',
+      hasSettings: true, // Indicate this tool has a settings panel
     },
     {
       id: 'eraser',
@@ -233,6 +232,16 @@ const Toolbar = ({
       shortcut: 'E',
     },
     {
+      id: 'pan',
+      name: 'Pan',
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11" />
+        </svg>
+      ),
+      shortcut: 'H',
+    },
+    {
       id: 'text',
       name: 'Text',
       icon: (
@@ -242,30 +251,7 @@ const Toolbar = ({
     },
   ];
 
-  const showBrushSize = activeTool === 'pen' || activeTool === 'eraser';
-  const showColorPicker = activeTool === 'pen' || activeTool === 'text' || activeTool === 'line' || activeTool === 'rectangle' || activeTool === 'circle';
   const currentShapeTool = shapeTools.find(tool => tool.id === selectedShapeTool) || shapeTools[0];
-
-  useEffect(() => {
-    if (!showBrushSize) {
-      setIsBrushControlsOpen(false);
-    }
-  }, [showBrushSize]);
-
-  useEffect(() => {
-    if (!isBrushControlsOpen) return;
-
-    const handleClickOutside = (event) => {
-      if (brushControlsRef.current && !brushControlsRef.current.contains(event.target)) {
-        setIsBrushControlsOpen(false);
-      }
-    };
-
-    window.addEventListener('pointerdown', handleClickOutside);
-    return () => {
-      window.removeEventListener('pointerdown', handleClickOutside);
-    };
-  }, [isBrushControlsOpen]);
 
   useEffect(() => {
     if (!isShapesMenuOpen) return;
@@ -375,7 +361,19 @@ const Toolbar = ({
         {tools.map((tool) => (
           <button
             key={tool.id}
-            onClick={() => onToolChange(tool.id)}
+            onClick={() => {
+              if (tool.hasSettings && activeTool === tool.id) {
+                // If tool is already active and has settings, toggle settings panel
+                setIsPenSettingsOpen(!isPenSettingsOpen);
+              } else {
+                // Otherwise, just activate the tool
+                onToolChange(tool.id);
+                if (tool.hasSettings) {
+                  // Auto-open settings panel when selecting a tool with settings
+                  setIsPenSettingsOpen(true);
+                }
+              }
+            }}
             className={cn(
               'relative group',
               'w-12 h-12 rounded-xl',
@@ -389,6 +387,9 @@ const Toolbar = ({
             title={`${tool.name} (${tool.shortcut})`}
           >
             {tool.icon}
+            {tool.hasSettings && (
+              <div className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-indigo-400 rounded-full border border-gray-800" />
+            )}
             
             {/* Tooltip */}
             <div className={cn(
@@ -401,6 +402,9 @@ const Toolbar = ({
             )}>
               {tool.name}
               <span className="text-gray-400 ml-2">({tool.shortcut})</span>
+              {tool.hasSettings && activeTool === tool.id && (
+                <div className="text-gray-500 text-[10px] mt-0.5">Click for settings</div>
+              )}
             </div>
           </button>
         ))}
@@ -504,59 +508,15 @@ const Toolbar = ({
       </div>
 
       {/* Divider */}
-      {(showBrushSize || showColorPicker) && (
-        <div className="h-px bg-gray-700 my-1" />
-      )}
+      <div className="h-px bg-gray-700 my-1" />
 
-      {/* Brush Size Slider */}
-      {showBrushSize && (
-        <div ref={brushControlsRef}>
-          <button
-            type="button"
-            onClick={() => setIsBrushControlsOpen((open) => !open)}
-            className={cn(
-              'relative group',
-              'w-12 h-12 rounded-xl',
-              'flex items-center justify-center',
-              'transition-all duration-200',
-              'hover:scale-105',
-              isBrushControlsOpen
-                ? 'bg-indigo-500 border-2 border-indigo-400 text-white shadow-lg'
-                : 'bg-gray-700/50 border border-gray-600/50 text-gray-300 hover:bg-gray-600/50 hover:text-white'
-            )}
-            title="Brush Size"
-          >
-            <div className="flex flex-col items-center justify-center gap-0.5">
-              <div
-                className="rounded-full transition-all duration-200"
-                style={{
-                  width: `${Math.max(4, Math.min(16, previewDotSize / 2.5))}px`,
-                  height: `${Math.max(4, Math.min(16, previewDotSize / 2.5))}px`,
-                  backgroundColor: activeTool === 'eraser' ? '#ffffff' : color,
-                  boxShadow: activeTool === 'eraser'
-                    ? '0 0 0 1px rgba(17,24,39,0.25)'
-                    : '0 2px 8px rgba(99,102,241,0.4)',
-                }}
-              />
-              <span className="text-[9px] font-medium">{brushSize}px</span>
-            </div>
-
-            {/* Tooltip */}
+      {/* Pen Settings (opens as panel when pen is active) */}
+      {activeTool === 'pen' && (
+        <div className="relative">
+          {/* Pen Settings Panel */}
+          {isPenSettingsOpen && (
             <div className={cn(
-              'absolute left-full ml-2 px-3 py-1.5',
-              'bg-gray-900 text-white text-xs rounded-lg',
-              'whitespace-nowrap',
-              'opacity-0 group-hover:opacity-100',
-              'transition-opacity duration-200',
-              'pointer-events-none'
-            )}>
-              Brush Size
-            </div>
-          </button>
-
-          {isBrushControlsOpen && (
-            <div className={cn(
-              'absolute left-full ml-6 top-0',
+              'absolute left-full ml-6 bottom-0',
               'backdrop-blur-md bg-gray-800/95 border border-gray-700',
               'rounded-2xl p-4 shadow-2xl',
               'min-w-[320px] max-h-[calc(100vh-8rem)]',
@@ -564,9 +524,9 @@ const Toolbar = ({
               'z-[70]'
             )}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-white font-semibold text-sm">Brush Size</h3>
+                <h3 className="text-white font-semibold text-sm">Pen Settings</h3>
                 <button
-                  onClick={() => setIsBrushControlsOpen(false)}
+                  onClick={() => setIsPenSettingsOpen(false)}
                   className="text-gray-400 hover:text-white transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -575,7 +535,45 @@ const Toolbar = ({
                 </button>
               </div>
 
-              <div className="space-y-4">
+              {/* Color Picker */}
+              <div className="mb-4">
+                <label className="text-xs text-gray-300 font-medium mb-2 block">Color</label>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setIsColorPickerOpen(!isColorPickerOpen)}
+                    className={cn(
+                      'w-12 h-12 rounded-xl flex-shrink-0',
+                      'border-2 transition-all duration-200',
+                      'hover:scale-105 flex items-center justify-center',
+                      isColorPickerOpen
+                        ? 'border-indigo-400 shadow-lg scale-105'
+                        : 'border-gray-600 hover:border-gray-500'
+                    )}
+                    style={{ backgroundColor: color }}
+                  >
+                    <div className="w-6 h-6 rounded-full border-2 border-white/50" />
+                  </button>
+                  <div className="flex-1 text-xs text-gray-400">
+                    Click to choose color
+                  </div>
+                </div>
+                {isColorPickerOpen && (
+                  <div className="mt-3">
+                    <ColorPicker
+                      selectedColor={color}
+                      onColorChange={onColorChange}
+                      isOpen={isColorPickerOpen}
+                      onClose={() => setIsColorPickerOpen(false)}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Brush Size */}
+              <div className="mb-4">
+                <label className="text-xs text-gray-300 font-medium mb-2 block">
+                  Brush Size: {brushSize}px
+                </label>
                 <div className="flex items-center gap-3">
                   <input
                     type="range"
@@ -584,7 +582,6 @@ const Toolbar = ({
                     step="1"
                     value={brushSize}
                     onChange={handleBrushSizeSlider}
-                    onFocus={() => setIsBrushControlsOpen(true)}
                     className={cn(
                       'w-full h-2 rounded-full appearance-none cursor-pointer',
                       'bg-gradient-to-r from-indigo-500/50 via-indigo-400/40 to-indigo-300/30',
@@ -615,123 +612,30 @@ const Toolbar = ({
                     max="60"
                     value={brushSize}
                     onChange={handleBrushSizeNumber}
-                    onFocus={() => setIsBrushControlsOpen(true)}
                     className="w-16 rounded-lg border border-gray-700 bg-gray-950/70 px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40"
                   />
                 </div>
-
-                <div className="flex items-center justify-between text-[10px] text-gray-500 px-1">
+                <div className="flex items-center justify-between text-[10px] text-gray-500 px-1 mt-1">
                   <span>Fine</span>
                   <span>Large</span>
                 </div>
-
-                {/* Live Preview */}
-                <div className="pt-3 border-t border-gray-700">
-                  <label className="text-xs text-gray-400 font-medium mb-2 block">Preview</label>
-                  <div className="bg-white rounded-lg h-16 flex items-center justify-center">
-                    <div
-                      className="rounded-full transition-all duration-200"
-                      style={{
-                        width: `${previewDotSize}px`,
-                        height: `${previewDotSize}px`,
-                        backgroundColor: activeTool === 'eraser' ? '#ffffff' : color,
-                        border: activeTool === 'eraser' ? '2px solid rgba(17,24,39,0.2)' : 'none',
-                        boxShadow: activeTool === 'eraser'
-                          ? 'inset 0 0 0 1px rgba(17,24,39,0.1)'
-                          : '0 6px 18px rgba(99,102,241,0.4)',
-                      }}
-                    />
-                  </div>
-                </div>
               </div>
-            </div>
-          )}
-        </div>
-      )}
 
-      {/* Color Picker Button */}
-      {showColorPicker && (
-        <div className="relative">
-          <button
-            onClick={() => setIsColorPickerOpen(!isColorPickerOpen)}
-            className={cn(
-              'w-12 h-12 rounded-xl',
-              'border-2 transition-all duration-200',
-              'hover:scale-105 flex items-center justify-center',
-              isColorPickerOpen
-                ? 'border-indigo-400 shadow-lg scale-105'
-                : 'border-gray-600 hover:border-gray-500'
-            )}
-            style={{ backgroundColor: color }}
-            title="Choose Color"
-          >
-            <div className="w-6 h-6 rounded-full border-2 border-white/50" />
-          </button>
-
-          {/* Color Picker Dropdown */}
-          <ColorPicker
-            selectedColor={color}
-            onColorChange={onColorChange}
-            isOpen={isColorPickerOpen}
-            onClose={() => setIsColorPickerOpen(false)}
-          />
-        </div>
-      )}
-
-      {/* Pen Settings Button (for pen tool) */}
-      {activeTool === 'pen' && (
-        <div className="relative">
-          <button
-            onClick={() => setIsPenSettingsOpen(!isPenSettingsOpen)}
-            className={cn(
-              'relative group',
-              'w-12 h-12 rounded-xl',
-              'flex items-center justify-center',
-              'transition-all duration-200',
-              'hover:scale-105',
-              isPenSettingsOpen
-                ? 'bg-indigo-500 border-2 border-indigo-400 text-white shadow-lg'
-                : 'bg-gray-700/50 border border-gray-600/50 text-gray-300 hover:bg-gray-600/50 hover:text-white'
-            )}
-            title="Pen Settings"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-            </svg>
-
-            {/* Tooltip */}
-            <div className={cn(
-              'absolute left-full ml-2 px-3 py-1.5',
-              'bg-gray-900 text-white text-xs rounded-lg',
-              'whitespace-nowrap',
-              'opacity-0 group-hover:opacity-100',
-              'transition-opacity duration-200',
-              'pointer-events-none'
-            )}>
-              Pen Settings
-            </div>
-          </button>
-
-          {/* Pen Settings Panel */}
-          {isPenSettingsOpen && (
-            <div className={cn(
-              'absolute left-full ml-6 bottom-0',
-              'backdrop-blur-md bg-gray-800/95 border border-gray-700',
-              'rounded-2xl p-4 shadow-2xl',
-              'min-w-[280px] max-h-[calc(100vh-8rem)]',
-              'overflow-y-auto',
-              'z-[70]'
-            )}>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-white font-semibold text-sm">Pen Settings</h3>
-                <button
-                  onClick={() => setIsPenSettingsOpen(false)}
-                  className="text-gray-400 hover:text-white transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+              {/* Brush Preview */}
+              <div className="mb-4 pb-4 border-b border-gray-700">
+                <label className="text-xs text-gray-400 font-medium mb-2 block">Preview</label>
+                <div className="bg-white rounded-lg h-16 flex items-center justify-center">
+                  <div
+                    className="rounded-full transition-all duration-200"
+                    style={{
+                      width: `${previewDotSize}px`,
+                      height: `${previewDotSize}px`,
+                      backgroundColor: color,
+                      opacity: previewOpacity,
+                      boxShadow: '0 6px 18px rgba(99,102,241,0.4)',
+                    }}
+                  />
+                </div>
               </div>
 
               {/* Pressure Sensitivity Toggle */}
@@ -850,7 +754,7 @@ const Toolbar = ({
                 <div className="bg-white rounded-lg h-24 cursor-crosshair">
                   <canvas
                     id="pen-test-canvas"
-                    width="248"
+                    width="288"
                     height="96"
                     className="w-full h-full rounded-lg"
                     style={{ touchAction: 'none' }}
@@ -1073,7 +977,7 @@ const Toolbar = ({
 };
 
 Toolbar.propTypes = {
-  activeTool: PropTypes.oneOf(['select', 'pen', 'eraser', 'text', 'line', 'rectangle', 'circle']).isRequired,
+  activeTool: PropTypes.oneOf(['select', 'pen', 'eraser', 'pan', 'text', 'line', 'rectangle', 'circle']).isRequired,
   onToolChange: PropTypes.func.isRequired,
   brushSize: PropTypes.number.isRequired,
   onBrushSizeChange: PropTypes.func.isRequired,

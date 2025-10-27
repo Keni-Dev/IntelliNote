@@ -191,8 +191,13 @@ function Editor() {
       }
     } else if (isMountedRef.current) {
       setSaveStatus('unsaved');
+      
+      // Auto-save after 1 second of inactivity
+      saveTimeoutRef.current = setTimeout(() => {
+        flushPendingSaves({ immediate: true }).catch(() => {});
+      }, 1000);
     }
-  }, []);
+  }, [flushPendingSaves]);
 
   // Handle zoom change from Navbar
   const handleZoomChange = useCallback((newZoom) => {

@@ -223,11 +223,18 @@ export function throttle(func, limit) {
 
 /**
  * Batch add objects to canvas efficiently
+ * Now supports VirtualCanvasEngine for ultra-high performance
  */
 export function batchAddObjects(canvas, objects) {
   if (!canvas || !Array.isArray(objects) || objects.length === 0) return;
 
-  // Disable rendering during batch add
+  // Use VirtualCanvasEngine if available
+  if (canvas.virtualEngine) {
+    canvas.virtualEngine.addObjects(objects);
+    return;
+  }
+
+  // Fallback to standard batch add
   const wasRendering = canvas.renderOnAddRemove;
   canvas.renderOnAddRemove = false;
 
@@ -265,6 +272,42 @@ export function getCanvasMemoryUsage(canvas) {
   return totalSize; // bytes
 }
 
+/**
+ * Get performance stats from VirtualCanvasEngine or canvas
+ * @returns {Object} Performance statistics
+ */
+export function getPerformanceStats(canvas) {
+  if (!canvas) return null;
+
+  // Use VirtualCanvasEngine stats if available
+  if (canvas.virtualEngine) {
+    return canvas.virtualEngine.getStats();
+  }
+
+  // Fallback to basic canvas stats
+  const objectCount = canvas.getObjects().length;
+  const memoryUsage = getCanvasMemoryUsage(canvas);
+
+  return {
+    totalObjects: objectCount,
+    renderedObjects: objectCount,
+    culledObjects: 0,
+    zoom: canvas.getZoom().toFixed(2),
+    memoryUsage: `${(memoryUsage / 1024 / 1024).toFixed(2)} MB`,
+    renderEfficiency: 'N/A (Virtual Engine disabled)'
+  };
+}
+
+/**
+ * Log performance statistics to console
+ */
+export function logPerformanceStats(canvas) {
+  const stats = getPerformanceStats(canvas);
+  if (stats) {
+    console.table(stats);
+  }
+}
+
 export default {
   RenderBatcher,
   isInViewport,
@@ -275,4 +318,6 @@ export default {
   throttle,
   batchAddObjects,
   getCanvasMemoryUsage,
+  getPerformanceStats,
+  logPerformanceStats,
 };
