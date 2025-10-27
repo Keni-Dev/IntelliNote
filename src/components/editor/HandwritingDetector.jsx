@@ -10,6 +10,7 @@ const DEBUG_COLORS = ['#3b82f6', '#22c55e', '#f97316', '#ec4899'];
 
 const ensureArray = (value) => (Array.isArray(value) ? value : []);
 
+// eslint-disable-next-line no-unused-vars
 const expandBounds = (bounds, padding = 0) => {
   if (!bounds) {
     return null;
@@ -227,7 +228,7 @@ const HandwritingDetector = ({
     }
   }, [canvas, clearHighlight]);
 
-  const updateDebugOverlays = useCallback((groups, activeArea = null) => {
+  const updateDebugOverlays = useCallback((groups, activeArea = null) => { // eslint-disable-line no-unused-vars
     if (!canvas) {
       return;
     }
@@ -236,27 +237,27 @@ const HandwritingDetector = ({
       return;
     }
 
-    // Show active writing area if available
-    if (activeArea) {
-      const activeRect = new fabric.Rect({
-        left: activeArea.minX,
-        top: activeArea.minY,
-        width: activeArea.width,
-        height: activeArea.height,
-        fill: 'rgba(139, 92, 246, 0.05)',
-        stroke: '#8b5cf6',
-        strokeWidth: 2,
-        strokeDashArray: [5, 5],
-        selectable: false,
-        evented: false,
-        excludeFromExport: true,
-      });
-      canvas.add(activeRect);
-      if (typeof activeRect.sendToBack === 'function') {
-        activeRect.sendToBack();
-      }
-      debugOverlayRef.current.push(activeRect);
-    }
+    // Show active writing area if available - DISABLED to make invisible
+    // if (activeArea) {
+    //   const activeRect = new fabric.Rect({
+    //     left: activeArea.minX,
+    //     top: activeArea.minY,
+    //     width: activeArea.width,
+    //     height: activeArea.height,
+    //     fill: 'rgba(139, 92, 246, 0.05)',
+    //     stroke: '#8b5cf6',
+    //     strokeWidth: 2,
+    //     strokeDashArray: [5, 5],
+    //     selectable: false,
+    //     evented: false,
+    //     excludeFromExport: true,
+    //   });
+    //   canvas.add(activeRect);
+    //   if (typeof activeRect.sendToBack === 'function') {
+    //     activeRect.sendToBack();
+    //   }
+    //   debugOverlayRef.current.push(activeRect);
+    // }
 
     ensureArray(groups).forEach((group, index) => {
       if (!group?.bounds) {
@@ -407,7 +408,7 @@ const HandwritingDetector = ({
     const verticalRadius = Math.min(baseVerticalRadius, 100);
     
     // Use the larger of the two for the context search radius
-    const dynamicRadius = Math.max(horizontalRadius, verticalRadius * 1.5);
+    // const dynamicRadius = Math.max(horizontalRadius, verticalRadius * 1.5);
     
     // Smart horizontal boundary detection: Find nearby equations and stop expansion at them
     // This allows long equations to expand but prevents conflicts with adjacent ones
@@ -518,8 +519,75 @@ const HandwritingDetector = ({
     // Calculate bounds around the equals sign
     const equalsBounds = equalsCandidate.bounds;
     
-    // Expand to capture full equation context
-    const expandedBounds = expandBounds(equalsBounds, dynamicRadius * 1.2);
+    // Expand HORIZONTALLY to capture the full equation (left side of equals sign)
+    // Start from equals sign and expand left until we stop finding strokes
+    const equalsCenter = {
+      x: (equalsBounds.minX + equalsBounds.maxX) / 2,
+      y: (equalsBounds.minY + equalsBounds.maxY) / 2
+    };
+    const equalsHeight = equalsBounds.height;
+    
+    // Find all strokes to the LEFT of the equals sign that are roughly on the same line
+    const verticalTolerance = equalsHeight * 3; // Within 3x the equals sign height
+    const leftStrokes = allStrokes.filter((stroke) => {
+      const strokeBounds = getStrokeBounds(stroke, analyzer);
+      if (!strokeBounds) return false;
+      
+      // Must be to the left of equals sign
+      if (strokeBounds.centerX >= equalsBounds.minX) return false;
+      
+      // Must be on roughly the same horizontal line (vertical alignment)
+      const verticalDistance = Math.abs(strokeBounds.centerY - equalsCenter.y);
+      return verticalDistance <= verticalTolerance;
+    });
+    
+    // Sort left strokes by X position (rightmost to leftmost)
+    leftStrokes.sort((a, b) => {
+      const aX = (a.bounds?.centerX ?? a.features?.bounds?.centerX ?? 0);
+      const bX = (b.bounds?.centerX ?? b.features?.bounds?.centerX ?? 0);
+      return bX - aX;
+    });
+    
+    // Expand left by finding continuous strokes (no large gaps)
+    let equationLeftBoundary = equalsBounds.minX;
+    let prevStrokeRight = equalsBounds.minX;
+    const maxGap = equalsHeight * 4; // Maximum gap between strokes
+    
+    for (const stroke of leftStrokes) {
+      const strokeBounds = getStrokeBounds(stroke, analyzer);
+      if (!strokeBounds) continue;
+      
+      const gap = prevStrokeRight - strokeBounds.maxX;
+      
+      // If gap is too large, stop expanding
+      if (gap > maxGap) {
+        break;
+      }
+      
+      // Include this stroke
+      equationLeftBoundary = Math.min(equationLeftBoundary, strokeBounds.minX);
+      prevStrokeRight = strokeBounds.minX; // Update for next iteration
+    }
+    
+    // Add some padding to the left
+    const horizontalPadding = equalsHeight * 0.5;
+    equationLeftBoundary -= horizontalPadding;
+    
+    // Create expanded bounds (horizontal expansion to the left, minimal vertical)
+    const expandedBounds = {
+      minX: equationLeftBoundary,
+      maxX: equalsBounds.maxX + horizontalPadding,
+      minY: equalsBounds.minY - verticalTolerance * 0.3,
+      maxY: equalsBounds.maxY + verticalTolerance * 0.3,
+      get width() { return this.maxX - this.minX; },
+      get height() { return this.maxY - this.minY; },
+      get centerX() { return (this.minX + this.maxX) / 2; },
+      get centerY() { return (this.minY + this.maxY) / 2; }
+    };
+    
+    console.log('[EqualSign] Equals bounds:', equalsBounds);
+    console.log('[EqualSign] Found', leftStrokes.length, 'strokes to the left');
+    console.log('[EqualSign] Expanded bounds:', expandedBounds);
     
     // Get strokes within expanded bounds (for the full equation context)
     const equationStrokes = allStrokes.filter((stroke) => {

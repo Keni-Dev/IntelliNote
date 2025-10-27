@@ -20,71 +20,78 @@ const renderStrokesToImage = (strokes = [], options = {}) => {
   if (!Array.isArray(strokes) || strokes.length === 0) return null;
 
   if (clipBounds) {
-    console.log('[LocalOCR] Clipping to bounds:', clipBounds);
+    console.log('[LocalOCR] Rendering with bounds (for reference):', clipBounds);
   }
 
+  // Don't clip individual points - just use all points from strokes that intersect bounds
+  // This prevents cutting off parts of characters
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  let totalPointsBefore = 0;
-  let totalPointsAfter = 0;
-  
   const normalized = strokes.map((stroke) => {
     const pts = stroke?.points || stroke?.strokePoints || [];
-    let points = pts.map((p) => ({ x: Number(p.x ?? p[0] ?? 0), y: Number(p.y ?? p[1] ?? 0) }));
-    totalPointsBefore += points.length;
-    
-    // If bounds are provided, filter points to only those within bounds
-    if (clipBounds) {
-      points = points.filter(({ x, y }) => 
-        x >= clipBounds.minX && x <= clipBounds.maxX &&
-        y >= clipBounds.minY && y <= clipBounds.maxY
-      );
-      totalPointsAfter += points.length;
-    } else {
-      totalPointsAfter += points.length;
-    }
+    const points = pts.map((p) => ({ x: Number(p.x ?? p[0] ?? 0), y: Number(p.y ?? p[1] ?? 0) }));
     
     points.forEach(({ x, y }) => {
       if (x < minX) minX = x; if (y < minY) minY = y; if (x > maxX) maxX = x; if (y > maxY) maxY = y;
     });
     return points;
-  }).filter(points => points.length > 0); // Remove strokes with no points in bounds
+  }).filter(points => points.length > 0);
 
   if (clipBounds) {
-    console.log(`[LocalOCR] Clipped ${totalPointsBefore} points to ${totalPointsAfter} points`);
-    console.log(`[LocalOCR] Rendering ${normalized.length} strokes (from ${strokes.length} input strokes)`);
+    console.log(`[LocalOCR] Rendering ${normalized.length} complete strokes (no point clipping)`);
+    console.log(`[LocalOCR] Stroke bounds: minX=${minX}, maxX=${maxX}, width=${maxX - minX}`);
+    console.log(`[LocalOCR] Stroke bounds: minY=${minY}, maxY=${maxY}, height=${maxY - minY}`);
   }
 
   if (!Number.isFinite(minX) || normalized.length === 0) return null;
 
   const width = Math.max(1, Math.ceil((maxX - minX) * scale + padding * 2));
   const height = Math.max(1, Math.ceil((maxY - minY) * scale + padding * 2));
+  
+  // Limit canvas size to prevent memory issues with very large drawings
+  const MAX_DIMENSION = 2048; // Maximum width or height
+  let renderScale = scale;
+  let scaledLineWidth = lineWidth;
+  
+  if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+    const scaleDownFactor = Math.min(MAX_DIMENSION / width, MAX_DIMENSION / height);
+    renderScale = scale * scaleDownFactor;
+    // IMPORTANT: Scale line width proportionally to maintain stroke visibility
+    scaledLineWidth = lineWidth / scaleDownFactor;
+    console.warn(`[LocalOCR] Canvas too large (${width}x${height}), scaling down by ${scaleDownFactor.toFixed(2)}`);
+    console.log(`[LocalOCR] Adjusted line width from ${lineWidth} to ${scaledLineWidth.toFixed(2)}`);
+  }
+  
+  const finalWidth = Math.max(1, Math.ceil((maxX - minX) * renderScale + padding * 2));
+  const finalHeight = Math.max(1, Math.ceil((maxY - minY) * renderScale + padding * 2));
+
+  console.log(`[LocalOCR] Final canvas size: ${finalWidth}x${finalHeight}`);
 
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = finalWidth;
+  canvas.height = finalHeight;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
   ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(0, 0, finalWidth, finalHeight);
   ctx.strokeStyle = '#000000';
-  ctx.lineWidth = lineWidth;
+  ctx.lineWidth = scaledLineWidth; // Use scaled line width
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
   normalized.forEach((points) => {
     if (points.length < 2) return;
     ctx.beginPath();
-    ctx.moveTo((points[0].x - minX) * scale + padding, (points[0].y - minY) * scale + padding);
+    ctx.moveTo((points[0].x - minX) * renderScale + padding, (points[0].y - minY) * renderScale + padding);
     for (let i = 1; i < points.length; i += 1) {
-      ctx.lineTo((points[i].x - minX) * scale + padding, (points[i].y - minY) * scale + padding);
+      ctx.lineTo((points[i].x - minX) * renderScale + padding, (points[i].y - minY) * renderScale + padding);
     }
     ctx.stroke();
   });
 
   return {
     dataUrl: canvas.toDataURL('image/png'),
-    bounds: { minX, minY, maxX, maxY, padding, scale },
+    bounds: { minX, minY, maxX, maxY, padding, scale: renderScale },
   };
 };
 

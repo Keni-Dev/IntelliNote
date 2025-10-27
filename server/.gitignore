@@ -9,7 +9,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-
+media
+./physics_resultant_forces.py
+.\physics_resultant_forces.py
 # Virtual environments
 venv/
 env/
