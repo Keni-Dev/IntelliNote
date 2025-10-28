@@ -8,7 +8,6 @@ import PropTypes from 'prop-types';
  */
 const ResizableDetectionBox = ({
   initialBounds,
-  strokes = [],
   onConfirm,
   onCancel,
   zoom = 1,
@@ -19,77 +18,13 @@ const ResizableDetectionBox = ({
   const [isResizing, setIsResizing] = useState(null); // null | 'nw' | 'ne' | 'sw' | 'se'
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const boxRef = useRef(null);
-  const [autoExpanded, setAutoExpanded] = useState(false);
 
-  // Auto-expand bounds to include overflowing strokes
+  // Update bounds when initialBounds changes (e.g., from auto-expansion in parent)
   useEffect(() => {
-    if (!strokes || strokes.length === 0) return;
-
-    // Find strokes that intersect or are close to current bounds
-    let needsExpansion = false;
-    let newMinX = bounds.minX;
-    let newMinY = bounds.minY;
-    let newMaxX = bounds.maxX;
-    let newMaxY = bounds.maxY;
-
-    const expansionMargin = 20; // Pixel margin for detection
-
-    strokes.forEach(stroke => {
-      const strokeBounds = stroke?.bounds || stroke?.features?.bounds;
-      if (!strokeBounds) return;
-
-      // Check if stroke intersects or is close to current bounds
-      const intersects = !(
-        strokeBounds.maxX < bounds.minX - expansionMargin ||
-        strokeBounds.minX > bounds.maxX + expansionMargin ||
-        strokeBounds.maxY < bounds.minY - expansionMargin ||
-        strokeBounds.minY > bounds.maxY + expansionMargin
-      );
-
-      if (intersects) {
-        // Check for overflow and expand bounds
-        if (strokeBounds.minX < bounds.minX) {
-          newMinX = Math.min(newMinX, strokeBounds.minX);
-          needsExpansion = true;
-        }
-        if (strokeBounds.maxX > bounds.maxX) {
-          newMaxX = Math.max(newMaxX, strokeBounds.maxX);
-          needsExpansion = true;
-        }
-        if (strokeBounds.minY < bounds.minY) {
-          newMinY = Math.min(newMinY, strokeBounds.minY);
-          needsExpansion = true;
-        }
-        if (strokeBounds.maxY > bounds.maxY) {
-          newMaxY = Math.max(newMaxY, strokeBounds.maxY);
-          needsExpansion = true;
-        }
-      }
-    });
-
-    if (needsExpansion) {
-      // Add some padding
-      const padding = 10;
-      newMinX -= padding;
-      newMinY -= padding;
-      newMaxX += padding;
-      newMaxY += padding;
-
-      setBounds({
-        minX: newMinX,
-        minY: newMinY,
-        maxX: newMaxX,
-        maxY: newMaxY,
-        width: newMaxX - newMinX,
-        height: newMaxY - newMinY,
-        centerX: (newMinX + newMaxX) / 2,
-        centerY: (newMinY + newMaxY) / 2,
-      });
-      setAutoExpanded(true);
-      
-      console.log('[ResizableBox] Auto-expanded bounds to include overflowing strokes');
+    if (initialBounds) {
+      setBounds(initialBounds);
     }
-  }, [strokes, bounds.minX, bounds.maxX, bounds.minY, bounds.maxY]);
+  }, [initialBounds]);
 
   const screenBounds = {
     left: bounds.minX * zoom + panOffset.x,
@@ -244,9 +179,6 @@ const ResizableDetectionBox = ({
         {/* Size indicator */}
         <div className="absolute -top-8 left-0 px-2 py-1 bg-blue-600 text-white text-xs font-semibold rounded shadow-lg">
           {Math.round(bounds.width)} × {Math.round(bounds.height)}px
-          {autoExpanded && (
-            <span className="ml-2 text-yellow-300">✨ Auto-expanded</span>
-          )}
         </div>
       </div>
 
@@ -286,7 +218,6 @@ ResizableDetectionBox.propTypes = {
     centerX: PropTypes.number.isRequired,
     centerY: PropTypes.number.isRequired,
   }).isRequired,
-  strokes: PropTypes.arrayOf(PropTypes.object),
   onConfirm: PropTypes.func.isRequired,
   onCancel: PropTypes.func.isRequired,
   zoom: PropTypes.number,
@@ -297,7 +228,6 @@ ResizableDetectionBox.propTypes = {
 };
 
 ResizableDetectionBox.defaultProps = {
-  strokes: [],
   zoom: 1,
   panOffset: { x: 0, y: 0 },
 };

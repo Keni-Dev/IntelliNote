@@ -759,6 +759,76 @@ const Canvas = forwardRef(({
       return;
     }
 
+    // AUTO-EXPAND: Automatically expand bounds to include all strokes before showing to user
+    if (candidate.strokes && candidate.strokes.length > 0 && candidate.bounds) {
+      let needsExpansion = false;
+      let newMinX = candidate.bounds.minX;
+      let newMinY = candidate.bounds.minY;
+      let newMaxX = candidate.bounds.maxX;
+      let newMaxY = candidate.bounds.maxY;
+
+      const expansionMargin = 20; // Pixel margin for detection
+      const padding = 10; // Extra padding after expansion
+
+      candidate.strokes.forEach(stroke => {
+        const strokeBounds = stroke?.bounds || stroke?.features?.bounds;
+        if (!strokeBounds) return;
+
+        // Check if stroke intersects or is close to current bounds
+        const intersects = !(
+          strokeBounds.maxX < candidate.bounds.minX - expansionMargin ||
+          strokeBounds.minX > candidate.bounds.maxX + expansionMargin ||
+          strokeBounds.maxY < candidate.bounds.minY - expansionMargin ||
+          strokeBounds.minY > candidate.bounds.maxY + expansionMargin
+        );
+
+        if (intersects) {
+          // Check for overflow and expand bounds
+          if (strokeBounds.minX < candidate.bounds.minX) {
+            newMinX = Math.min(newMinX, strokeBounds.minX);
+            needsExpansion = true;
+          }
+          if (strokeBounds.maxX > candidate.bounds.maxX) {
+            newMaxX = Math.max(newMaxX, strokeBounds.maxX);
+            needsExpansion = true;
+          }
+          if (strokeBounds.minY < candidate.bounds.minY) {
+            newMinY = Math.min(newMinY, strokeBounds.minY);
+            needsExpansion = true;
+          }
+          if (strokeBounds.maxY > candidate.bounds.maxY) {
+            newMaxY = Math.max(newMaxY, strokeBounds.maxY);
+            needsExpansion = true;
+          }
+        }
+      });
+
+      if (needsExpansion) {
+        // Add padding
+        newMinX -= padding;
+        newMinY -= padding;
+        newMaxX += padding;
+        newMaxY += padding;
+
+        // Update candidate with expanded bounds
+        candidate = {
+          ...candidate,
+          bounds: {
+            minX: newMinX,
+            minY: newMinY,
+            maxX: newMaxX,
+            maxY: newMaxY,
+            width: newMaxX - newMinX,
+            height: newMaxY - newMinY,
+            centerX: (newMinX + newMaxX) / 2,
+            centerY: (newMinY + newMaxY) / 2,
+          }
+        };
+
+        console.log('[Canvas] Auto-expanded detection bounds to include all strokes');
+      }
+    }
+
     setHandwritingSuggestion(candidate);
     releaseHighlightRef.current = candidate.releaseHighlight || null;
   }, []);
@@ -2819,7 +2889,6 @@ const Canvas = forwardRef(({
       {showResizableBox && resizableBoxBounds && (
         <ResizableDetectionBox
           initialBounds={resizableBoxBounds}
-          strokes={strokesRef.current}
           onConfirm={handleConfirmResizableBox}
           onCancel={handleCancelResizableBox}
           zoom={zoom}
