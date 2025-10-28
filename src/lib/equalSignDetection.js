@@ -3,6 +3,8 @@
  * Scale-independent detection that works at any zoom level
  */
 
+import { debugLog, isDebugEnabled } from './debugLogger';
+
 /**
  * Get bounding box from points
  */
@@ -89,12 +91,15 @@ export const detectEqualSign = (strokes, options = {}) => {
     maxSpacingRatio = 3.5,        // Maximum spacing (relative to line thickness)
     minLengthRatio = 2,           // Minimum line length (relative to thickness)
     ignoreSpacing = true,         // Disable spacing check by default
-    debug = false,
+    debug = false,                // Legacy debug flag (use VITE_DEBUG_EQUALSIGN instead)
   } = options;
+
+  // Check if debug is enabled via environment or options
+  const debugEnabled = isDebugEnabled('EQUALSIGN') || debug;
 
   // Must have exactly 2 strokes for an equal sign
   if (!strokes || strokes.length !== 2) {
-    if (debug) console.log('[EqualSign] Invalid stroke count:', strokes?.length);
+    if (debugEnabled) debugLog('EQUALSIGN', 'Invalid stroke count:', strokes?.length);
     return null;
   }
 
@@ -106,16 +111,16 @@ export const detectEqualSign = (strokes, options = {}) => {
   const points2 = stroke2.points || stroke2.strokePoints || [];
 
   if (points1.length === 0 || points2.length === 0) {
-    if (debug) console.log('[EqualSign] Empty stroke points');
+    if (debugEnabled) debugLog('EQUALSIGN', 'Empty stroke points');
     return null;
   }
 
   const bbox1 = stroke1.bounds || stroke1.features?.bounds || getBoundingBox(points1);
   const bbox2 = stroke2.bounds || stroke2.features?.bounds || getBoundingBox(points2);
 
-  if (debug) {
-    console.log('[EqualSign] Bbox1:', bbox1);
-    console.log('[EqualSign] Bbox2:', bbox2);
+  if (debugEnabled) {
+    debugLog('EQUALSIGN', 'Bbox1:', bbox1);
+    debugLog('EQUALSIGN', 'Bbox2:', bbox2);
   }
 
   // Check 1: Both strokes must be horizontal
@@ -123,10 +128,10 @@ export const detectEqualSign = (strokes, options = {}) => {
   const horizontal2 = isHorizontalStroke(bbox2, minAspectRatio);
 
   if (!horizontal1 || !horizontal2) {
-    if (debug) {
+    if (debugEnabled) {
       const ar1 = bbox1.width / bbox1.height;
       const ar2 = bbox2.width / bbox2.height;
-      console.log('[EqualSign] FAIL: Not horizontal. AR1:', ar1.toFixed(2), 'AR2:', ar2.toFixed(2), 'Need >=', minAspectRatio);
+      debugLog('EQUALSIGN', 'FAIL: Not horizontal. AR1:', ar1.toFixed(2), 'AR2:', ar2.toFixed(2), 'Need >=', minAspectRatio);
     }
     return null;
   }
@@ -135,8 +140,8 @@ export const detectEqualSign = (strokes, options = {}) => {
   const widthRatio = Math.min(bbox1.width, bbox2.width) / Math.max(bbox1.width, bbox2.width);
   
   if (widthRatio < minWidthRatio) {
-    if (debug) {
-      console.log('[EqualSign] FAIL: Width mismatch. Ratio:', widthRatio.toFixed(2), 'Need >=', minWidthRatio);
+    if (debugEnabled) {
+      debugLog('EQUALSIGN', 'FAIL: Width mismatch. Ratio:', widthRatio.toFixed(2), 'Need >=', minWidthRatio);
     }
     return null;
   }

@@ -5,6 +5,7 @@ import { Copy, ChevronDown, ChevronUp, RefreshCw, Info, AlertCircle, Lightbulb, 
 import GlassCard from '../common/GlassCard';
 import GlassButton from '../common/GlassButton';
 import Toast from '../common/Toast';
+import HandwrittenMath from './HandwrittenMath';
 
 /**
  * Component to display equation solutions with step-by-step breakdown
@@ -309,9 +310,17 @@ export default function MathSolutionDisplay({
             <div className="text-xs text-blue-100 mb-2">Answer:</div>
             <div className="text-2xl font-bold text-white">
               {typeof result === 'object' && result.value !== undefined ? (
-                <InlineMath math={formatResult(result.value)} />
+                <HandwrittenMath 
+                  latex={formatResult(result.value)} 
+                  scale={1.5}
+                  color="#eab308"
+                />
               ) : (
-                <InlineMath math={formatResult(result)} />
+                <HandwrittenMath 
+                  latex={formatResult(result)} 
+                  scale={1.5}
+                  color="#eab308"
+                />
               )}
             </div>
           </div>

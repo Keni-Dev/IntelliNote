@@ -1,6 +1,7 @@
 export { default as MathInput } from './MathInput';
 export { default as MathSymbolPicker } from './MathSymbolPicker';
 export { default as MathSolutionDisplay } from './MathSolutionDisplay';
+export { default as HandwrittenMath } from './HandwrittenMath';
 export { default as VariablePanel } from './VariablePanel';
 export { default as OCRSettings } from './OCRSettings';
 export { default as OCRPerformance } from './OCRPerformance';

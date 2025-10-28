@@ -10,6 +10,8 @@ import { buildContextFromArea } from '../../lib/spatialContext';
 import { generateHandwriting, renderHandwritingToCanvas } from '../../lib/handwritingSynthesis';
 import { getOCRConfig } from '../../config/ocr';
 import { strokeDebugger } from '../../lib/strokeDebugger';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 // Use solver via hook to keep a single engine instance shared with the VariablePanel
 import Toolbar from './Toolbar';
 import GridBackground from './GridBackground';
@@ -1669,91 +1671,89 @@ const Canvas = forwardRef(({
         
         if (bounds) {
           // Place answer to the right of the rightmost point of the handwriting
-          answerX = bounds.maxX + 12;
+          answerX = bounds.maxX + 20; // Increased spacing
           answerY = bounds.centerY - 8; // Center vertically with slight upward offset
         }
         
-        // Format the answer cleanly
-        const answerText = typeof result.result === 'number' 
+        // Calculate average stroke height for size matching
+        const calculateAverageStrokeHeight = (strokes) => {
+          if (!strokes || strokes.length === 0) return 40; // Default fallback
+          
+          const heights = strokes
+            .map(stroke => {
+              const bounds = stroke.bounds || stroke.features?.bounds;
+              return bounds ? bounds.height : 0;
+            })
+            .filter(h => h > 0);
+          
+          if (heights.length === 0) return 40;
+          
+          // Remove outliers (too small - like horizontal bars)
+          heights.sort((a, b) => a - b);
+          const q1Index = Math.floor(heights.length * 0.25);
+          const q3Index = Math.floor(heights.length * 0.75);
+          const filteredHeights = heights.slice(q1Index, q3Index + 1);
+          
+          // Calculate average
+          const avg = filteredHeights.reduce((sum, h) => sum + h, 0) / filteredHeights.length;
+          return avg;
+        };
+        
+        // Get strokes from handwriting suggestion or pending ref
+        const strokes = handwritingSuggestion?.strokes || pendingHandwritingRef.current?.strokes || [];
+        
+        console.log('[Canvas] Found', strokes.length, 'strokes for size calculation');
+        
+        const avgHeight = calculateAverageStrokeHeight(strokes);
+        
+        // Calculate font size based on average stroke height
+        // Multiply by 2.0 to make it more visible and match handwriting better
+        const calculatedFontSize = Math.max(48, Math.min(150, avgHeight * 2.0));
+        
+        console.log('[Canvas] Average stroke height:', avgHeight, 'Calculated font size:', calculatedFontSize);
+        console.log('[Canvas] Answer position: x=', answerX, 'y=', answerY);
+        
+        // Get the result as LaTeX
+        let latexResult = typeof result.result === 'number' 
           ? result.result.toString()
           : String(result.result);
         
-        // Get user preference for handwriting synthesis
-        const ocrConfig = getOCRConfig();
-        const useHandwritingSynthesis = ocrConfig.handwritingSynthesis ?? true;
+        // Parse LaTeX to more readable format
+        let displayText = latexResult;
+        // Handle fractions: \frac{a}{b} -> a/b
+        displayText = displayText.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '$1/$2');
+        // Handle square roots: \sqrt{x} -> √x  
+        displayText = displayText.replace(/\\sqrt\{([^}]+)\}/g, '√$1');
+        // Handle powers with braces: x^{2} -> x²
+        displayText = displayText.replace(/\^{2}/g, '²');
+        displayText = displayText.replace(/\^{3}/g, '³');
+        // Remove LaTeX commands
+        displayText = displayText.replace(/\\left|\\right/g, '');
+        displayText = displayText.replace(/\\\\/g, '');
         
-        let answerObject = null;
+        console.log('[Canvas] Rendering answer:', displayText, 'with font size:', calculatedFontSize);
         
-        if (useHandwritingSynthesis) {
-          // Try to generate handwritten strokes for the answer
-          try {
-            const synthResult = await generateHandwriting(answerText, {
-              bias: 0.5,
-              timeout: 2000 // 2 second timeout
-            });
-            
-            if (synthResult.success && synthResult.strokes && synthResult.strokes.length > 0) {
-              // Render handwritten answer
-              answerObject = renderHandwritingToCanvas(canvas, synthResult.strokes, {
-                left: answerX,
-                top: answerY,
-                scale: 0.5, // Scale down RNN output to match canvas
-                color: '#2563eb',
-                strokeWidth: 2
-              });
-              answerObject.set({
-                customType: 'mathAnswer',
-                selectable: true,
-                evented: true
-              });
-            } else {
-              // Fallback to font rendering
-              console.warn('[Canvas] Handwriting synthesis failed, using font fallback:', synthResult.error);
-              answerObject = new fabric.IText(answerText, {
-                left: answerX,
-                top: answerY,
-                fill: '#2563eb',
-                fontSize: 24,
-                fontFamily: 'Patrick Hand, Comic Sans MS, cursive',
-                fontWeight: 'normal',
-                customType: 'mathAnswer',
-                selectable: true,
-                editable: false,
-              });
-            }
-          } catch (error) {
-            console.error('[Canvas] Handwriting synthesis error:', error);
-            // Fallback to font rendering
-            answerObject = new fabric.IText(answerText, {
-              left: answerX,
-              top: answerY,
-              fill: '#2563eb',
-              fontSize: 24,
-              fontFamily: 'Patrick Hand, Comic Sans MS, cursive',
-              fontWeight: 'normal',
-              customType: 'mathAnswer',
-              selectable: true,
-              editable: false,
-            });
-          }
-        } else {
-          // User disabled handwriting synthesis, use font
-          answerObject = new fabric.IText(answerText, {
-            left: answerX,
-            top: answerY,
-            fill: '#2563eb',
-            fontSize: 24,
-            fontFamily: 'Patrick Hand, Comic Sans MS, cursive',
-            fontWeight: 'normal',
-            customType: 'mathAnswer',
-            selectable: true,
-            editable: false,
-          });
-        }
+        // Create text object with calculated size
+        const answerObject = new fabric.IText(displayText, {
+          left: answerX,
+          top: answerY,
+          fill: '#eab308', // Yellow color
+          fontSize: calculatedFontSize,
+          fontFamily: "'Gochi Hand', 'Kalam', 'Patrick Hand', cursive",
+          fontWeight: 'normal',
+          customType: 'mathAnswer',
+          selectable: true,
+          editable: false,
+        });
+        
+        console.log('[Canvas] Created answer object:', answerObject);
         
         if (answerObject) {
           canvas.add(answerObject);
           canvas.requestRenderAll();
+          console.log('[Canvas] Answer added to canvas at', answerX, answerY);
+        } else {
+          console.error('[Canvas] Failed to create answer object');
         }
 
         // Optionally show a small solution panel for steps (but don't duplicate the equation)

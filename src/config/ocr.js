@@ -5,13 +5,13 @@ const CONFIG_STORAGE_KEY = 'intellinote:ocr:config';
 const CREDENTIAL_STORAGE_KEY = 'intellinote:ocr:credentials';
 const HISTORY_STORAGE_KEY = 'intellinote:ocr:history';
 const DEFAULT_CONFIG = {
-  mode: 'hybrid',
-  provider: 'openrouter', // 'openrouter' | 'local' (local TrOCR service)
+  mode: 'cloud',
+  provider: 'local', // 'local' (TrOCR service) | 'openrouter' (future integration)
   language: 'en-US',
   math: true,
   minConfidence: 0.5, // Lower threshold so simple equations don't escalate needlessly
   cacheEnabled: true,
-  // OpenRouter OCR defaults (vision-capable model recommended)
+  // OpenRouter OCR defaults (future integration - vision-capable model)
   // Best models for OCR: anthropic/claude-3.5-sonnet, openai/gpt-4o
   openrouterOCRModel: 'openrouter/andromeda-alpha',
   // Local OCR service URL (FastAPI server running TrOCR)

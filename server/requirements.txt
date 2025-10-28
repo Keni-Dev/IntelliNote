@@ -2,6 +2,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pillow==10.4.0
+python-dotenv>=1.0.0
 
 # ML dependencies for TrOCR (Hugging Face)
 transformers>=4.44.0
@@ -10,6 +11,10 @@ safetensors>=0.4.4
 
 # Math solving dependencies
 sympy>=1.12
+
+# Testing dependencies (optional, for test suite)
+pytest>=7.4.0
+requests>=2.31.0
 
 # Handwriting synthesis (NOT YET AVAILABLE)
 # The original library (https://github.com/sjvasquez/handwriting-synthesis) uses deprecated TensorFlow 1.6
