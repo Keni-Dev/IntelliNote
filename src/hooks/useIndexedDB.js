@@ -211,12 +211,13 @@ export const useIndexedDB = () => {
    * Creates a new note in a notebook
    * @param {number} notebookId - Parent notebook ID
    * @param {string} [title='Untitled Note'] - Note title
+   * @param {string} [noteType='auto'] - Note type (auto, algebra, calculus, physics, etc.)
    * @returns {Promise<number>} The created note ID
    */
-  const handleCreateNote = useCallback(async (notebookId, title = 'Untitled Note') => {
+  const handleCreateNote = useCallback(async (notebookId, title = 'Untitled Note', noteType = 'auto') => {
     try {
       setError(null)
-      const id = await createNote(notebookId, title)
+      const id = await createNote(notebookId, title, noteType)
       await refreshNotes(notebookId)
       await refreshStats()
       return id

@@ -8,6 +8,9 @@ transformers>=4.44.0
 accelerate>=0.33.0
 safetensors>=0.4.4
 
+# Math solving dependencies
+sympy>=1.12
+
 # Handwriting synthesis (NOT YET AVAILABLE)
 # The original library (https://github.com/sjvasquez/handwriting-synthesis) uses deprecated TensorFlow 1.6
 # and cannot be installed on modern Python. Frontend automatically falls back to font rendering.

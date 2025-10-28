@@ -465,7 +465,9 @@ const Canvas = forwardRef(({
     const width = Math.max(0, Math.abs(bottomRight.x - topLeft.x));
     const height = Math.max(0, Math.abs(bottomRight.y - topLeft.y));
 
-    const panSignature = `${Math.round(panX)}:${Math.round(panY)}:${Math.round(zoom * 100)}`;
+    // Include bounds dimensions in signature to detect auto-expansion
+    const boundsSignature = `${Math.round(bounds.minX)}:${Math.round(bounds.minY)}:${Math.round(bounds.maxX)}:${Math.round(bounds.maxY)}`;
+    const panSignature = `${Math.round(panX)}:${Math.round(panY)}:${Math.round(zoom * 100)}:${boundsSignature}`;
     
     // Only update if signature changed (avoid sub-pixel updates)
     setHandwritingHighlight((prev) => {
@@ -822,7 +824,9 @@ const Canvas = forwardRef(({
             height: newMaxY - newMinY,
             centerX: (newMinX + newMaxX) / 2,
             centerY: (newMinY + newMaxY) / 2,
-          }
+          },
+          // Add timestamp to force React re-render on bounds change
+          _boundsUpdateTime: Date.now()
         };
 
         console.log('[Canvas] Auto-expanded detection bounds to include all strokes');
@@ -1652,8 +1656,8 @@ const Canvas = forwardRef(({
         300 // 300px radius
       );
       
-      // Solve with context awareness
-      const result = solveWithContext(normalized, spatialContext);
+      // Solve with context awareness (now async to support smart solver)
+      const result = await solveWithContext(normalized, spatialContext);
       
       if (result.success && result.result !== undefined && result.result !== null) {
         // Render solution as handwritten-style text beside the equation strokes

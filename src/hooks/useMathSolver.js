@@ -218,18 +218,66 @@ export function useMathSolver(noteId) {
 
   /**
    * Solve with spatial context using the same engine instance
+   * Falls back to smart math solver if local engine fails
    */
-  const solveWithContext = useCallback((equation, context = {}) => {
+  const solveWithContext = useCallback(async (equation, context = {}) => {
     if (!engine) {
       return { success: false, error: 'Math engine not initialized' };
     }
+    
     try {
+      // Try local engine first
       const result = engine.solveWithContext(equation, context);
-      // After solving, refresh local copies of variables/formulas
-      setVariables(Object.fromEntries(engine.getAllVariables()));
-      setFormulas(Object.fromEntries(engine.getAllFormulas()));
+      
+      // If local engine succeeded, use it
+      if (result.success && result.result !== undefined && result.result !== null) {
+        // After solving, refresh local copies of variables/formulas
+        setVariables(Object.fromEntries(engine.getAllVariables()));
+        setFormulas(Object.fromEntries(engine.getAllFormulas()));
+        return result;
+      }
+      
+      // If local engine failed or couldn't solve, try smart math solver
+      console.log('[MathSolver] Local engine failed, trying smart math solver...');
+      
+      const { solveMathEquation } = await import('../lib/smartMathSolver');
+      const smartResult = await solveMathEquation(equation, 'auto');
+      
+      if (smartResult.success && smartResult.result) {
+        // Get solutions array
+        const solutions = smartResult.result.solutions || [];
+        
+        // For multiple solutions, join them with commas
+        let displayResult;
+        if (Array.isArray(solutions) && solutions.length > 0) {
+          // Solutions already formatted as "x = value" by backend
+          displayResult = solutions.join(', ');
+        } else {
+          displayResult = smartResult.result.result || 'No solution found';
+        }
+        
+        // Convert smart solver result to match expected format
+        const formattedResult = {
+          success: true,
+          result: displayResult,
+          solutions: solutions,  // Keep original array for reference
+          type: smartResult.result.type || 'smart_solution',
+          steps: smartResult.result.steps || [],
+          variable: smartResult.result.variable,
+          explanation: smartResult.explanation,
+          source: 'smart_solver'
+        };
+        
+        console.log('[MathSolver] Smart solver result:', formattedResult);
+        return formattedResult;
+      }
+      
+      // Both failed, return original result
+      console.log('[MathSolver] Both solvers failed');
       return result;
+      
     } catch (error) {
+      console.error('[MathSolver] Error:', error);
       return { success: false, error: error.message };
     }
   }, [engine]);

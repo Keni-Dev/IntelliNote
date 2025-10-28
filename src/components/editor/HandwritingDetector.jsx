@@ -519,8 +519,8 @@ const HandwritingDetector = ({
     // Calculate bounds around the equals sign
     const equalsBounds = equalsCandidate.bounds;
     
-    // Expand HORIZONTALLY to capture the full equation (left side of equals sign)
-    // Start from equals sign and expand left until we stop finding strokes
+    // Expand HORIZONTALLY to capture the full equation (BOTH sides of equals sign)
+    // Start from equals sign and expand left AND right until we stop finding strokes
     const equalsCenter = {
       x: (equalsBounds.minX + equalsBounds.maxX) / 2,
       y: (equalsBounds.minY + equalsBounds.maxY) / 2
@@ -541,11 +541,31 @@ const HandwritingDetector = ({
       return verticalDistance <= verticalTolerance;
     });
     
+    // Find all strokes to the RIGHT of the equals sign
+    const rightStrokes = allStrokes.filter((stroke) => {
+      const strokeBounds = getStrokeBounds(stroke, analyzer);
+      if (!strokeBounds) return false;
+      
+      // Must be to the right of equals sign
+      if (strokeBounds.centerX <= equalsBounds.maxX) return false;
+      
+      // Must be on roughly the same horizontal line (vertical alignment)
+      const verticalDistance = Math.abs(strokeBounds.centerY - equalsCenter.y);
+      return verticalDistance <= verticalTolerance;
+    });
+    
     // Sort left strokes by X position (rightmost to leftmost)
     leftStrokes.sort((a, b) => {
       const aX = (a.bounds?.centerX ?? a.features?.bounds?.centerX ?? 0);
       const bX = (b.bounds?.centerX ?? b.features?.bounds?.centerX ?? 0);
       return bX - aX;
+    });
+    
+    // Sort right strokes by X position (leftmost to rightmost)
+    rightStrokes.sort((a, b) => {
+      const aX = (a.bounds?.centerX ?? a.features?.bounds?.centerX ?? 0);
+      const bX = (b.bounds?.centerX ?? b.features?.bounds?.centerX ?? 0);
+      return aX - bX;
     });
     
     // Expand left by finding continuous strokes (no large gaps)
@@ -569,14 +589,35 @@ const HandwritingDetector = ({
       prevStrokeRight = strokeBounds.minX; // Update for next iteration
     }
     
-    // Add some padding to the left
+    // Expand right by finding continuous strokes (no large gaps)
+    let equationRightBoundary = equalsBounds.maxX;
+    let prevStrokeLeft = equalsBounds.maxX;
+    
+    for (const stroke of rightStrokes) {
+      const strokeBounds = getStrokeBounds(stroke, analyzer);
+      if (!strokeBounds) continue;
+      
+      const gap = strokeBounds.minX - prevStrokeLeft;
+      
+      // If gap is too large, stop expanding
+      if (gap > maxGap) {
+        break;
+      }
+      
+      // Include this stroke
+      equationRightBoundary = Math.max(equationRightBoundary, strokeBounds.maxX);
+      prevStrokeLeft = strokeBounds.maxX; // Update for next iteration
+    }
+    
+    // Add some padding to both sides
     const horizontalPadding = equalsHeight * 0.5;
     equationLeftBoundary -= horizontalPadding;
+    equationRightBoundary += horizontalPadding;
     
-    // Create expanded bounds (horizontal expansion to the left, minimal vertical)
+    // Create expanded bounds (horizontal expansion to BOTH sides, minimal vertical)
     const expandedBounds = {
       minX: equationLeftBoundary,
-      maxX: equalsBounds.maxX + horizontalPadding,
+      maxX: equationRightBoundary,
       minY: equalsBounds.minY - verticalTolerance * 0.3,
       maxY: equalsBounds.maxY + verticalTolerance * 0.3,
       get width() { return this.maxX - this.minX; },
@@ -586,7 +627,7 @@ const HandwritingDetector = ({
     };
     
     console.log('[EqualSign] Equals bounds:', equalsBounds);
-    console.log('[EqualSign] Found', leftStrokes.length, 'strokes to the left');
+    console.log('[EqualSign] Found', leftStrokes.length, 'strokes to the left,', rightStrokes.length, 'strokes to the right');
     console.log('[EqualSign] Expanded bounds:', expandedBounds);
     
     // Get strokes within expanded bounds (for the full equation context)

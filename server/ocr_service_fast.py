@@ -1,3 +1,8 @@
+"""
+Pre-warmed OCR Service - Loads SymPy at startup for instant solving
+Eliminates the ~2.7s SymPy import delay on first request
+"""
+
 import base64
 import io
 import os
@@ -14,7 +19,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from PIL import Image
 
-app = FastAPI(title="TrOCR Math OCR Service", version="0.3.0")
+# PRE-WARM: Import fast solver at module level (happens at server startup)
+print("[STARTUP] Pre-warming math solver...")
+startup_time = time.time()
+from fast_math_solver import get_fast_solver
+_solver = get_fast_solver()  # Initialize SymPy now, not on first request
+print(f"[STARTUP] ✅ Math solver ready in {(time.time() - startup_time):.2f}s")
+
+app = FastAPI(title="TrOCR Math OCR Service (Pre-warmed)", version="0.4.0")
 
 # Create directory for saving images
 SAVE_DIR = Path(__file__).parent / "ocr_images"
@@ -41,11 +53,6 @@ _trocr = {
     "device": "cpu",
 }
 
-# Lazy-load handwriting synthesis model
-_handwriting_rnn = {
-    "model": None,
-}
-
 MODEL_ID = os.environ.get("TROCR_MODEL", "fhswf/TrOCR_Math_handwritten")
 
 
@@ -69,20 +76,6 @@ def load_trocr():
     return _trocr["processor"], _trocr["model"], _trocr["device"]
 
 
-def load_handwriting_rnn():
-    """Lazy-load handwriting synthesis RNN model"""
-    if _handwriting_rnn["model"] is None:
-        # Note: The original handwriting-synthesis library (https://github.com/sjvasquez/handwriting-synthesis)
-        # uses TensorFlow 1.6 which is incompatible with modern Python environments.
-        # This is a placeholder for future integration with a modern alternative.
-        raise RuntimeError(
-            "Handwriting synthesis is not yet available. "
-            "The original library uses deprecated TensorFlow 1.6. "
-            "Falling back to font-based rendering on the frontend."
-        )
-    return _handwriting_rnn["model"]
-
-
 class RecognizeBody(BaseModel):
     image: str  # data URL or base64
 
@@ -93,26 +86,6 @@ class RecognizeResult(BaseModel):
     boxes: Optional[list] = None
     classification: Optional[dict] = None
     solution: Optional[dict] = None
-
-
-class GenerateHandwritingBody(BaseModel):
-    text: str
-    bias: Optional[float] = 0.5  # Controls randomness (0.1-1.5 typical range)
-    style: Optional[int] = None  # Optional style index from training data
-
-
-class StrokePoint(BaseModel):
-    x: float
-    y: float
-    penUp: bool
-
-
-class GenerateHandwritingResult(BaseModel):
-    strokes: list[StrokePoint]
-    width: float
-    height: float
-    success: bool
-    error: Optional[str] = None
 
 
 class SolveMathBody(BaseModel):
@@ -159,7 +132,7 @@ def decode_image(data: str) -> Image.Image:
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "TrOCR Math OCR Service running"}
+    return {"status": "ok", "message": "Pre-warmed TrOCR Math OCR Service running", "version": "0.4.0"}
 
 
 @app.get("/health")
@@ -167,11 +140,12 @@ async def health():
     """Health check endpoint for server monitoring"""
     return {
         "status": "ok",
-        "service": "TrOCR Math OCR Service",
-        "version": "0.3.0",
+        "service": "TrOCR Math OCR Service (Pre-warmed)",
+        "version": "0.4.0",
         "model_loaded": _trocr["model"] is not None,
         "model_id": MODEL_ID,
-        "features": ["ocr", "math_solver", "handwriting_synthesis"]
+        "math_solver_ready": _solver is not None,
+        "features": ["ocr", "fast_math_solver", "pre_warmed"]
     }
 
 
@@ -205,7 +179,6 @@ async def recognize(req: RecognizeBody):
             generated_ids = model.generate(pixel_values, max_new_tokens=256)
         text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
         text = (text or "").strip()
-        # TrOCR may not output strict LaTeX; we pass through and let the front-end handle.
         confidence = 0.8 if text else 0.0
         
         print(f"[OCR] Recognized: '{text}' (confidence: {confidence})")
@@ -224,232 +197,57 @@ async def recognize(req: RecognizeBody):
         raise HTTPException(status_code=500, detail=f"Recognition failed: {e}")
 
 
-@app.post("/generate_handwriting", response_model=GenerateHandwritingResult)
-async def generate_handwriting(req: GenerateHandwritingBody):
-    """
-    Generate handwritten strokes for the given text using RNN-based synthesis.
-    Returns stroke data compatible with fabric.js Path rendering.
-    """
-    if not req.text or not req.text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-    
-    try:
-        model = load_handwriting_rnn()
-        import numpy as np
-        
-        # Generate strokes using the RNN model
-        # bias controls randomness: lower = more uniform, higher = more varied
-        bias = max(0.1, min(1.5, req.bias))  # Clamp to safe range
-        
-        # Generate handwriting (returns numpy array of shape [n_points, 3])
-        # Each point is [dx, dy, pen_up] where pen_up is 0 or 1
-        strokes_array = model.sample(
-            text=req.text,
-            bias=bias,
-            style=req.style
-        )
-        
-        # Convert cumulative offsets to absolute coordinates
-        x, y = 0.0, 0.0
-        stroke_points = []
-        min_x, max_x = float('inf'), float('-inf')
-        min_y, max_y = float('inf'), float('-inf')
-        
-        for dx, dy, pen_up in strokes_array:
-            x += float(dx)
-            y += float(dy)
-            
-            stroke_points.append({
-                "x": x,
-                "y": y,
-                "penUp": bool(pen_up)
-            })
-            
-            # Track bounds
-            min_x = min(min_x, x)
-            max_x = max(max_x, x)
-            min_y = min(min_y, y)
-            max_y = max(max_y, y)
-        
-        # Normalize coordinates to start at (0, 0)
-        for point in stroke_points:
-            point["x"] -= min_x
-            point["y"] -= min_y
-        
-        width = max_x - min_x
-        height = max_y - min_y
-        
-        return {
-            "strokes": stroke_points,
-            "width": width,
-            "height": height,
-            "success": True,
-            "error": None
-        }
-        
-    except RuntimeError as e:
-        return {
-            "strokes": [],
-            "width": 0,
-            "height": 0,
-            "success": False,
-            "error": str(e)
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Handwriting generation failed: {e}"
-        )
-
-
 @app.post("/solve_math", response_model=SolveMathResult)
 async def solve_math(req: SolveMathBody):
     """
-    Solve mathematical equations using the smart math engine.
-    Automatically classifies and solves equations in algebra, calculus, physics, etc.
+    Solve mathematical equations using the pre-warmed fast solver.
+    Ultra-fast solving with <50ms latency (after SymPy is pre-loaded).
     
     Args:
         equation: The mathematical equation to solve
-        note_type: Optional hint about the type ('algebra', 'calculus', 'physics', 'auto')
+        note_type: Type hint ('algebra', 'calculus', 'physics', etc.)
     
     Returns:
         Classification, solution, and step-by-step explanation
     """
-    # Start timing
     start_time = time.time()
-    timestamps = {
-        'start': start_time,
-        'import_start': None,
-        'import_end': None,
-        'solve_start': None,
-        'solve_end': None,
-        'subprocess_start': None,
-        'subprocess_end': None,
-        'parse_start': None,
-        'parse_end': None,
-        'end': None
-    }
     
     try:
-        # FAST PATH: Use in-memory solver when note_type is provided (no subprocess overhead)
-        if req.note_type and req.note_type != 'auto':
-            timestamps['import_start'] = time.time()
-            from fast_math_solver import fast_solve
-            timestamps['import_end'] = time.time()
-            
-            timestamps['solve_start'] = time.time()
-            result = fast_solve(req.equation, req.note_type)
-            timestamps['solve_end'] = time.time()
-            timestamps['end'] = time.time()
-            
-            # Calculate latencies
-            total_latency = timestamps['end'] - timestamps['start']
-            import_latency = timestamps['import_end'] - timestamps['import_start']
-            solve_latency = timestamps['solve_end'] - timestamps['solve_start']
-            
-            # Log to history file
-            history_entry = {
-                'timestamp': datetime.now().isoformat(),
-                'equation': req.equation,
-                'note_type': req.note_type,
-                'success': result.get('success', False),
-                'classification': result.get('classification', {}).get('problem_type') if result.get('classification') else None,
-                'latency_ms': {
-                    'total': round(total_latency * 1000, 2),
-                    'import': round(import_latency * 1000, 2),
-                    'solve': round(solve_latency * 1000, 2)
-                },
-                'fast_path': True,
-                'has_solution': result.get('result') is not None,
-                'error': result.get('error')
-            }
-            
-            # Append to history file
-            try:
-                with open(MATH_HISTORY_FILE, 'a', encoding='utf-8') as f:
-                    f.write(json_lib.dumps(history_entry) + '\n')
-            except Exception as e:
-                print(f"[MATH] Warning: Failed to write history: {e}")
-            
-            # Print to console
-            print(f"[MATH] ⚡ FAST: '{req.equation}' | "
-                  f"Type: {history_entry['classification']} | "
-                  f"Latency: {history_entry['latency_ms']['total']}ms "
-                  f"(solve: {history_entry['latency_ms']['solve']}ms)")
-            
-            return {
-                'success': result.get('success', False),
-                'classification': result.get('classification'),
-                'result': result.get('result'),
-                'explanation': result.get('explanation'),
-                'error': result.get('error')
-            }
+        # Use pre-warmed solver (SymPy already loaded!)
+        from fast_math_solver import fast_solve
         
-        # SLOW PATH: Use subprocess for auto-detection (backward compatibility)
-        # Prepare input for the Python math engine
-        input_data = {
-            'input': req.equation,
-            'note_type': req.note_type
-        }
+        solve_start = time.time()
+        result = fast_solve(req.equation, req.note_type or 'algebra')
+        solve_end = time.time()
         
-        # Run the smart math engine as a subprocess
-        timestamps['subprocess_start'] = time.time()
-        process = subprocess.Popen(
-            [sys.executable, 'smart_math_engine.py'],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=Path(__file__).parent,
-            text=True
-        )
+        total_latency = (time.time() - start_time) * 1000
+        solve_latency = (solve_end - solve_start) * 1000
         
-        # Send input and get output
-        stdout, stderr = process.communicate(input=json_lib.dumps(input_data))
-        timestamps['subprocess_end'] = time.time()
-        
-        if process.returncode != 0:
-            raise Exception(f"Math engine error: {stderr}")
-        
-        # Parse the result
-        timestamps['parse_start'] = time.time()
-        result = json_lib.loads(stdout)
-        timestamps['parse_end'] = time.time()
-        timestamps['end'] = time.time()
-        
-        # Calculate latencies
-        total_latency = timestamps['end'] - timestamps['start']
-        subprocess_latency = timestamps['subprocess_end'] - timestamps['subprocess_start']
-        parse_latency = timestamps['parse_end'] - timestamps['parse_start']
-        
-        # Log to history file
+        # Log to history
         history_entry = {
             'timestamp': datetime.now().isoformat(),
             'equation': req.equation,
             'note_type': req.note_type,
             'success': result.get('success', False),
-            'classification': result.get('classification', {}).get('problem_type') if result.get('classification') else None,
+            'classification': result.get('classification', {}).get('problem_type'),
             'latency_ms': {
-                'total': round(total_latency * 1000, 2),
-                'subprocess': round(subprocess_latency * 1000, 2),
-                'parse': round(parse_latency * 1000, 2)
+                'total': round(total_latency, 2),
+                'solve': round(solve_latency, 2)
             },
-            'fast_path': False,
+            'pre_warmed': True,
             'has_solution': result.get('result') is not None,
             'error': result.get('error')
         }
         
-        # Append to history file (JSONL format - one JSON per line)
         try:
             with open(MATH_HISTORY_FILE, 'a', encoding='utf-8') as f:
                 f.write(json_lib.dumps(history_entry) + '\n')
         except Exception as e:
             print(f"[MATH] Warning: Failed to write history: {e}")
         
-        # Print to console for real-time monitoring
-        print(f"[MATH] 🐢 SLOW: '{req.equation}' | "
+        print(f"[MATH] ⚡ INSTANT: '{req.equation}' | "
               f"Type: {history_entry['classification']} | "
-              f"Latency: {history_entry['latency_ms']['total']}ms "
-              f"(subprocess: {history_entry['latency_ms']['subprocess']}ms)")
+              f"Latency: {total_latency:.2f}ms")
         
         return {
             'success': result.get('success', False),
@@ -460,19 +258,16 @@ async def solve_math(req: SolveMathBody):
         }
         
     except Exception as e:
-        timestamps['end'] = time.time()
-        total_latency = timestamps['end'] - timestamps['start']
+        total_latency = (time.time() - start_time) * 1000
         
-        # Log error to history
         error_entry = {
             'timestamp': datetime.now().isoformat(),
             'equation': req.equation,
             'note_type': req.note_type,
             'success': False,
             'classification': None,
-            'latency_ms': {
-                'total': round(total_latency * 1000, 2)
-            },
+            'latency_ms': {'total': round(total_latency, 2)},
+            'pre_warmed': True,
             'has_solution': False,
             'error': str(e)
         }
@@ -480,11 +275,10 @@ async def solve_math(req: SolveMathBody):
         try:
             with open(MATH_HISTORY_FILE, 'a', encoding='utf-8') as f:
                 f.write(json_lib.dumps(error_entry) + '\n')
-        except Exception as log_error:
-            print(f"[MATH] Warning: Failed to write error history: {log_error}")
+        except:
+            pass
         
-        print(f"[MATH] Error solving '{req.equation}': {str(e)} | "
-              f"Latency: {round(total_latency * 1000, 2)}ms")
+        print(f"[MATH] ❌ Error: '{req.equation}' | {str(e)} | {total_latency:.2f}ms")
         
         return {
             'success': False,
@@ -497,15 +291,7 @@ async def solve_math(req: SolveMathBody):
 
 @app.get("/math_history", response_model=MathHistoryStats)
 async def get_math_history(limit: int = 100):
-    """
-    Get statistics and history of math solver requests for debugging latency.
-    
-    Args:
-        limit: Maximum number of recent requests to return (default: 100)
-    
-    Returns:
-        Statistics including latency metrics, success rate, and recent requests
-    """
+    """Get statistics and history of math solver requests"""
     try:
         if not MATH_HISTORY_FILE.exists():
             return {
@@ -520,7 +306,6 @@ async def get_math_history(limit: int = 100):
                 'recent_requests': []
             }
         
-        # Read all history entries
         entries = []
         with open(MATH_HISTORY_FILE, 'r', encoding='utf-8') as f:
             for line in f:
@@ -540,12 +325,10 @@ async def get_math_history(limit: int = 100):
                 'recent_requests': []
             }
         
-        # Calculate statistics
         total_requests = len(entries)
         successful_requests = sum(1 for e in entries if e.get('success', False))
         failed_requests = total_requests - successful_requests
         
-        # Latency statistics
         latencies = [e['latency_ms']['total'] for e in entries]
         latencies_sorted = sorted(latencies)
         
@@ -553,7 +336,6 @@ async def get_math_history(limit: int = 100):
         min_latency = min(latencies)
         max_latency = max(latencies)
         
-        # Calculate percentiles
         def percentile(data, p):
             n = len(data)
             idx = int(n * p / 100)
@@ -567,16 +349,14 @@ async def get_math_history(limit: int = 100):
             'p99': percentile(latencies_sorted, 99)
         }
         
-        # Classification breakdown
         classification_breakdown = {}
         for entry in entries:
             classification = entry.get('classification', 'unknown')
             if classification:
                 classification_breakdown[classification] = classification_breakdown.get(classification, 0) + 1
         
-        # Get recent requests (last N)
         recent_requests = entries[-limit:] if len(entries) > limit else entries
-        recent_requests.reverse()  # Most recent first
+        recent_requests.reverse()
         
         return {
             'total_requests': total_requests,
@@ -599,10 +379,7 @@ async def get_math_history(limit: int = 100):
 
 @app.delete("/math_history")
 async def clear_math_history():
-    """
-    Clear the math solver history file.
-    Useful for starting fresh debugging sessions.
-    """
+    """Clear the math solver history file"""
     try:
         if MATH_HISTORY_FILE.exists():
             MATH_HISTORY_FILE.unlink()
@@ -621,4 +398,5 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("ocr_service:app", host="0.0.0.0", port=port, reload=False)
+    print(f"[STARTUP] Starting pre-warmed server on port {port}...")
+    uvicorn.run("ocr_service_fast:app", host="0.0.0.0", port=port, reload=False)

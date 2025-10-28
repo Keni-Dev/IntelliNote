@@ -138,19 +138,19 @@ function NotebookView() {
   };
 
   // Handle save note (create or update)
-  const handleSaveNote = async (title) => {
+  const handleSaveNote = async (title, noteType = 'auto') => {
     setIsSaving(true);
     try {
       if (selectedNote) {
         // Update existing note
-        await updateNote(selectedNote.id, { title });
+        await updateNote(selectedNote.id, { title, noteType });
         await refreshNotes(parseInt(notebookId));
         setToast({ message: 'Note updated successfully!', type: 'success' });
         setShowNoteModal(false);
         setSelectedNote(null);
       } else {
         // Create new note
-        const noteId = await createNote(parseInt(notebookId), title);
+        const noteId = await createNote(parseInt(notebookId), title, noteType);
         await refreshNotes(parseInt(notebookId));
         setToast({ message: 'Note created successfully!', type: 'success' });
         setShowNoteModal(false);

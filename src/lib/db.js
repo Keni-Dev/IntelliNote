@@ -154,10 +154,11 @@ export const deleteNotebook = async (id) => {
  * Creates a new note in a notebook
  * @param {number} notebookId - The parent notebook ID
  * @param {string} [title='Untitled Note'] - The note title
+ * @param {string} [noteType='auto'] - The note type (auto, algebra, calculus, physics, etc.)
  * @returns {Promise<number>} The ID of the created note
  * @throws {Error} If creation fails
  */
-export const createNote = async (notebookId, title = 'Untitled Note') => {
+export const createNote = async (notebookId, title = 'Untitled Note', noteType = 'auto') => {
   try {
     if (!notebookId) {
       throw new Error('Notebook ID is required')
@@ -173,6 +174,7 @@ export const createNote = async (notebookId, title = 'Untitled Note') => {
     const id = await db.notes.add({
       notebookId: Number(notebookId),
       title: title.trim(),
+      noteType: noteType || 'auto',
       canvasData: null,
       createdAt: now,
       updatedAt: now,
@@ -182,7 +184,7 @@ export const createNote = async (notebookId, title = 'Untitled Note') => {
     // Update notebook's updatedAt timestamp
     await updateNotebook(notebookId, {})
 
-    console.log(`✅ Note created with ID: ${id}`)
+    console.log(`✅ Note created with ID: ${id} (type: ${noteType})`)
     return id
   } catch (error) {
     console.error('❌ Error creating note:', error)
