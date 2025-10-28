@@ -14,7 +14,9 @@ import { strokeDebugger } from '../../lib/strokeDebugger';
 import Toolbar from './Toolbar';
 import GridBackground from './GridBackground';
 import HandwritingDetector from './HandwritingDetector';
+import ResizableDetectionBox from './ResizableDetectionBox';
 import GlassModal from '../common/GlassModal';
+import OCRDebugPreview from '../common/OCRDebugPreview';
 import { MathInput, MathSolutionDisplay, VariablePanel, OCRSettings } from '../math';
 
 const Canvas = forwardRef(({
@@ -92,14 +94,6 @@ const Canvas = forwardRef(({
   const lastSolveTriggerRef = useRef({ signature: null, timestamp: 0 });
   const [handwritingSuggestion, setHandwritingSuggestion] = useState(null);
   const [handwritingHighlight, setHandwritingHighlight] = useState(null);
-  const [autoDeleteHandwriting, setAutoDeleteHandwriting] = useState(() => {
-    try {
-      return localStorage.getItem('intellinote-handwriting-autodelete') === '1';
-    } catch (error) {
-      console.warn('Unable to read handwriting auto-delete preference:', error);
-      return false;
-    }
-  });
   const [handwritingDebug, setHandwritingDebug] = useState(() => {
     try {
       return localStorage.getItem('intellinote-handwriting-debug') === '1';
@@ -109,6 +103,9 @@ const Canvas = forwardRef(({
     }
   });
   const [showOCRSettings, setShowOCRSettings] = useState(false);
+  const [showResizableBox, setShowResizableBox] = useState(false);
+  const [resizableBoxBounds, setResizableBoxBounds] = useState(null);
+  const resizableBoxCallbackRef = useRef(null);
   const canvasJustLoadedRef = useRef(true);
   const userInteractedRef = useRef(false);
 
@@ -468,12 +465,20 @@ const Canvas = forwardRef(({
     const width = Math.max(0, Math.abs(bottomRight.x - topLeft.x));
     const height = Math.max(0, Math.abs(bottomRight.y - topLeft.y));
 
-    // Always update when handwritingSuggestion.bounds changes
-    setHandwritingHighlight({
-      left: offsetX + minX - 12,
-      top: offsetY + minY - 12,
-      width: width + 24,
-      height: height + 24,
+    const panSignature = `${Math.round(panX)}:${Math.round(panY)}:${Math.round(zoom * 100)}`;
+    
+    // Only update if signature changed (avoid sub-pixel updates)
+    setHandwritingHighlight((prev) => {
+      if (prev?.panSignature === panSignature) {
+        return prev;
+      }
+      return {
+        left: offsetX + minX - 12,
+        top: offsetY + minY - 12,
+        width: width + 24,
+        height: height + 24,
+        panSignature,
+      };
     });
   }, [canvas, handwritingSuggestion, zoom, panX, panY]);
 
@@ -505,13 +510,12 @@ const Canvas = forwardRef(({
 
     pendingHandwritingRef.current = {
       strokeIds: (handwritingSuggestion.strokes || []).map((stroke) => stroke.id),
-      deleteOriginal: handwritingSuggestion.deleteOriginal ?? autoDeleteHandwriting,
       releaseHighlight: releaseHighlightRef.current,
       bounds: handwritingSuggestion.bounds || handwritingSuggestion.equals?.bounds,
     };
 
     setHandwritingSuggestion(null);
-  }, [handwritingSuggestion, canvas, detectEquation, autoDeleteHandwriting]);
+  }, [handwritingSuggestion, canvas, detectEquation]);
 
   const handleHandwritingDismiss = useCallback(() => {
     setHandwritingSuggestion(null);
@@ -521,25 +525,6 @@ const Canvas = forwardRef(({
       releaseHighlightRef.current = null;
     }
     pendingHandwritingRef.current = null;
-  }, []);
-
-  const handleHandwritingDeleteToggle = useCallback(() => {
-    setHandwritingSuggestion((prev) => {
-      if (!prev) {
-        return prev;
-      }
-      const nextValue = !prev.deleteOriginal;
-      setAutoDeleteHandwriting(nextValue);
-      try {
-        localStorage.setItem('intellinote-handwriting-autodelete', nextValue ? '1' : '0');
-      } catch (error) {
-        console.warn('Unable to persist handwriting auto-delete preference:', error);
-      }
-      return {
-        ...prev,
-        deleteOriginal: nextValue,
-      };
-    });
   }, []);
 
   const handleToggleHandwritingDebug = useCallback(() => {
@@ -559,6 +544,45 @@ const Canvas = forwardRef(({
       return next;
     });
   }, []);
+
+  const handleAdjustRegion = useCallback(async () => {
+    if (!handwritingSuggestion?.bounds) return;
+    
+    setResizableBoxBounds(handwritingSuggestion.bounds);
+    setShowResizableBox(true);
+    
+    // Store callback for when user confirms the adjusted region
+    resizableBoxCallbackRef.current = async (adjustedBounds) => {
+      setShowResizableBox(false);
+      setResizableBoxBounds(null);
+      
+      // Get strokes within the adjusted bounds
+      const adjustedStrokes = (handwritingSuggestion.strokes || []).filter((stroke) => {
+        const strokeBounds = stroke?.bounds || stroke?.features?.bounds;
+        if (!strokeBounds) return false;
+        
+        // Check if stroke intersects with adjusted bounds
+        return !(
+          strokeBounds.maxX < adjustedBounds.minX ||
+          strokeBounds.minX > adjustedBounds.maxX ||
+          strokeBounds.maxY < adjustedBounds.minY ||
+          strokeBounds.minY > adjustedBounds.maxY
+        );
+      });
+      
+      if (adjustedStrokes.length === 0) {
+        setHandwritingSuggestion(null);
+        return;
+      }
+      
+      // Update bounds and strokes without re-running detection yet
+      setHandwritingSuggestion((prev) => ({
+        ...prev,
+        bounds: adjustedBounds,
+        strokes: adjustedStrokes,
+      }));
+    };
+  }, [handwritingSuggestion]);
 
   const handleRecognizeEquation = useCallback(async () => {
     if (!handwritingSuggestion || !canvas) return;
@@ -602,6 +626,7 @@ const Canvas = forwardRef(({
         mode: config.mode,
         minConfidence: config.minConfidence,
         bounds, // Pass bounds to clip strokes to the detection area
+        fabricCanvas: canvas, // Pass the fabric canvas for screenshot method
       });
       
       const equation = (result.equation || result.latex || '').trim();
@@ -617,6 +642,9 @@ const Canvas = forwardRef(({
         loading: false,
         analysis,
         intent: 'equation', // Now it's a recognized equation
+        // Store debug info for preview
+        debugImage: result.debugImage,
+        debugInfo: result.debugInfo,
       }));
       
     } catch (error) {
@@ -628,6 +656,70 @@ const Canvas = forwardRef(({
       }));
     }
   }, [handwritingSuggestion, canvas]);
+
+  const handleCancelResizableBox = useCallback(() => {
+    setShowResizableBox(false);
+    setResizableBoxBounds(null);
+    resizableBoxCallbackRef.current = null;
+  }, []);
+
+  const handleConfirmResizableBox = useCallback((adjustedBounds) => {
+    if (!canvas || !handwritingSuggestion) return;
+    
+    // Get strokes from strokesRef instead of canvas objects
+    const allStrokes = strokesRef.current || [];
+    
+    // Helper to check if stroke intersects with bounds
+    const strokeIntersectsBounds = (stroke, bounds) => {
+      // Get bounds from stroke metadata
+      const strokeBounds = stroke?.bounds || stroke?.features?.bounds;
+      
+      if (!strokeBounds) {
+        console.warn('[ResizeBox] Stroke missing bounds:', stroke.id);
+        return false;
+      }
+      
+      // Check intersection
+      const intersects = !(
+        strokeBounds.maxX < bounds.minX ||
+        strokeBounds.minX > bounds.maxX ||
+        strokeBounds.maxY < bounds.minY ||
+        strokeBounds.minY > bounds.maxY
+      );
+      
+      return intersects;
+    };
+    
+    // Filter strokes within the adjusted bounds
+    const strokesInBounds = allStrokes.filter(stroke => 
+      strokeIntersectsBounds(stroke, adjustedBounds)
+    );
+    
+    console.log('[ResizeBox] Adjusted bounds:', adjustedBounds);
+    console.log('[ResizeBox] Total strokes in strokesRef:', allStrokes.length);
+    console.log('[ResizeBox] Found', strokesInBounds.length, 'strokes in new bounds');
+    
+    // Debug: log first few strokes to see their bounds
+    if (strokesInBounds.length === 0 && allStrokes.length > 0) {
+      console.log('[ResizeBox] Sample stroke bounds:', 
+        allStrokes.slice(0, 3).map(s => ({ id: s.id, bounds: s?.bounds || s?.features?.bounds }))
+      );
+    }
+    
+    // Update the handwriting suggestion with new strokes and bounds
+    setHandwritingSuggestion(prev => ({
+      ...prev,
+      strokes: strokesInBounds,
+      bounds: adjustedBounds,
+    }));
+    
+    // Close the resizable box
+    setShowResizableBox(false);
+    setResizableBoxBounds(null);
+    
+    // Clear the callback ref - we've already done the update above
+    resizableBoxCallbackRef.current = null;
+  }, [canvas, handwritingSuggestion]);
 
   // Handle handwriting candidate from HandwritingDetector
   const handleHandwritingCandidate = useCallback((candidate) => {
@@ -1637,20 +1729,8 @@ const Canvas = forwardRef(({
     setMathInputAnalysis(null);
 
     if (pendingHandwritingRef.current) {
-      const { strokeIds, deleteOriginal, releaseHighlight } = pendingHandwritingRef.current;
-      if (deleteOriginal && Array.isArray(strokeIds)) {
-        let removedAny = false;
-        strokeIds.forEach((strokeId) => {
-          const stroke = strokesRef.current.find((item) => item.id === strokeId);
-          if (stroke?.path) {
-            canvas.remove(stroke.path);
-            removedAny = true;
-          }
-        });
-        if (removedAny && typeof canvas.requestRenderAll === 'function') {
-          canvas.requestRenderAll();
-        }
-      }
+      const { releaseHighlight } = pendingHandwritingRef.current;
+      // Note: We no longer delete the handwriting strokes - they stay on the canvas
       if (typeof releaseHighlight === 'function') {
         releaseHighlight();
       }
@@ -2589,6 +2669,16 @@ const Canvas = forwardRef(({
                 </button>
                 <button
                   type="button"
+                  onClick={handleAdjustRegion}
+                  className="px-3 py-2 text-sm font-semibold text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors border border-purple-200"
+                  title="Adjust detection region"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
                   onClick={handleHandwritingDismiss}
                   className="px-3 py-2 text-sm font-semibold text-gray-600 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors"
                   title="Dismiss"
@@ -2623,6 +2713,16 @@ const Canvas = forwardRef(({
                 </button>
                 <button
                   type="button"
+                  onClick={handleAdjustRegion}
+                  className="px-3 py-2 text-sm font-semibold text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors border border-blue-200"
+                  title="Adjust detection region"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
                   onClick={handleHandwritingDismiss}
                   className="px-3 py-2 text-sm font-semibold text-gray-600 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors"
                 >
@@ -2631,18 +2731,6 @@ const Canvas = forwardRef(({
               </>
             )}
           </div>
-
-          {handwritingSuggestion.intent !== 'note' && handwritingSuggestion.intent !== 'equation-candidate' && (
-            <label className="mt-3 flex items-center gap-2 text-xs text-gray-600">
-              <input
-                type="checkbox"
-                checked={handwritingSuggestion.deleteOriginal}
-                onChange={handleHandwritingDeleteToggle}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              Delete handwriting after conversion
-            </label>
-          )}
 
           <button
             type="button"
@@ -2727,6 +2815,18 @@ const Canvas = forwardRef(({
         enabled={!drawingInProgressRef.current}
       />
 
+      {/* Resizable Detection Box */}
+      {showResizableBox && resizableBoxBounds && (
+        <ResizableDetectionBox
+          initialBounds={resizableBoxBounds}
+          strokes={strokesRef.current}
+          onConfirm={handleConfirmResizableBox}
+          onCancel={handleCancelResizableBox}
+          zoom={zoom}
+          panOffset={{ x: panOffset.x, y: panOffset.y }}
+        />
+      )}
+
       <div
         ref={canvasHostRef}
         className="absolute inset-0"
@@ -2757,6 +2857,12 @@ const Canvas = forwardRef(({
           </div>
         )}
       </div>
+
+      {/* OCR Debug Preview - only visible when VITE_DEBUG=true */}
+      <OCRDebugPreview
+        imageData={handwritingSuggestion?.debugImage}
+        debugInfo={handwritingSuggestion?.debugInfo}
+      />
     </div>
   );
 });

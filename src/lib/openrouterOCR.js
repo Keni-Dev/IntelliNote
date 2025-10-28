@@ -13,7 +13,38 @@ const renderStrokesToImage = (strokes = [], options = {}) => {
   // This prevents cutting off parts of characters
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const normalized = strokes.map((stroke) => {
-    const pts = stroke?.points || stroke?.strokePoints || [];
+    // Handle different stroke formats:
+    // 1. Custom stroke objects with points/strokePoints array
+    // 2. Fabric.js path objects with path commands
+    let pts = stroke?.points || stroke?.strokePoints || [];
+    
+    // If no points array, try to extract from fabric.js path
+    if (pts.length === 0 && stroke?.path) {
+      // Fabric.js stores path as SVG commands:
+      // ['M', x, y] - Move to
+      // ['L', x, y] - Line to
+      // ['Q', cpx, cpy, x, y] - Quadratic curve
+      // ['C', cp1x, cp1y, cp2x, cp2y, x, y] - Cubic curve
+      // We need to extract the endpoint coordinates from each command
+      pts = stroke.path.map(cmd => {
+        const type = cmd[0];
+        if (type === 'M' || type === 'L') {
+          // Move/Line: endpoint at [1], [2]
+          return { x: cmd[1], y: cmd[2] };
+        } else if (type === 'Q') {
+          // Quadratic: endpoint at [3], [4]
+          return { x: cmd[3], y: cmd[4] };
+        } else if (type === 'C') {
+          // Cubic: endpoint at [5], [6]
+          return { x: cmd[5], y: cmd[6] };
+        } else if (type === 'Z' || type === 'z') {
+          // Close path - no point
+          return null;
+        }
+        return null;
+      }).filter(p => p !== null);
+    }
+    
     const points = pts.map((p) => ({ x: Number(p.x ?? p[0] ?? 0), y: Number(p.y ?? p[1] ?? 0) }));
     
     points.forEach(({ x, y }) => {
@@ -88,13 +119,14 @@ export const recognizeHandwriting = async (strokes, options = {}) => {
     return { ...cache.get(cacheKey), cached: true };
   }
 
-  // Pass bounds to renderStrokesToImage to clip strokes
+  // Always use stroke re-rendering for now
+  console.log('[OpenRouter] Using stroke re-rendering');
   const renderingOptions = {
     ...(options.rendering || { padding: 16, lineWidth: 3, scale: 1 }),
-    bounds: options.bounds // Add bounds for clipping
+    bounds: options.bounds
   };
-  
   const dataUrl = renderStrokesToImage(strokes, renderingOptions);
+  
   if (!dataUrl) {
     return { latex: '', confidence: 0, error: 'Unable to render strokes for OCR.', usedFallback: true };
   }

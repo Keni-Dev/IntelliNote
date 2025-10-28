@@ -9,8 +9,168 @@
  */
 
 import { getOCRConfig, getOCRCache, setOCRStatus, createStrokeSignature } from '../config/ocr';
+import * as fabric from 'fabric';
 
-// Render strokes to a cropped PNG data URL
+/**
+ * Capture a screenshot of a specific region from the fabric.js canvas
+ * This method correctly handles zoom, pan, and transformation
+ * 
+ * KEY FACTORS HANDLED:
+ * 1. Zoom: Uses viewportTransform[0] to get current zoom level
+ * 2. Pan: Uses viewportTransform[4] and [5] for X/Y pan offsets
+ * 3. Coordinate Systems:
+ *    - Canvas Coordinates (World Space): Where strokes actually are (minX, minY, etc.)
+ *    - Screen Coordinates: What you see on screen = canvas coords * zoom + pan
+ * 4. Small Equations: Works fine - just captures smaller region
+ * 5. Large Equations: Works fine - captures larger region
+ * 6. Any Zoom Level: Automatically converts canvas→screen coords using transform
+ * 
+ * PROCESS:
+ * 1. Receive bounds in canvas coordinates (from stroke bounds)
+ * 2. Convert to screen coordinates using viewport transform
+ * 3. Capture that screen region from the rendered canvas
+ * 4. Draw to temporary canvas, unscaling back to original size
+ * 5. Return as PNG data URL
+ * 
+ * @param {fabric.Canvas} fabricCanvas - The fabric.js canvas instance
+ * @param {Object} bounds - The bounds in canvas coordinates { minX, minY, maxX, maxY }
+ * @param {Object} options - Rendering options { padding, scale }
+ * @returns {Object} - { dataUrl, bounds } or null
+ */
+const captureCanvasRegion = (fabricCanvas, bounds, strokes, options = {}) => {
+  if (!fabricCanvas || !bounds) {
+    console.error('[LocalOCR] Missing canvas or bounds for screenshot');
+    return null;
+  }
+
+  const padding = options.padding ?? 16;
+
+  // Bounds are in canvas coordinates (world space)
+  const { minX, minY, maxX, maxY } = bounds;
+  const width = maxX - minX;
+  const height = maxY - minY;
+
+  console.log('[LocalOCR] Screenshot - Canvas bounds:', { minX, minY, maxX, maxY, width, height });
+
+  if (width <= 0 || height <= 0) {
+    console.error('[LocalOCR] Invalid bounds dimensions');
+    return null;
+  }
+
+  // Get viewport transform for debugging
+  const vpt = fabricCanvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+  const currentZoom = vpt[0];
+  const panX = vpt[4];
+  const panY = vpt[5];
+
+  console.log('[LocalOCR] Viewport transform:', { zoom: currentZoom, panX, panY });
+
+  // Create output canvas
+  const tempCanvas = document.createElement('canvas');
+  const croppedWidth = Math.ceil(width + padding * 2);
+  const croppedHeight = Math.ceil(height + padding * 2);
+  
+  tempCanvas.width = croppedWidth;
+  tempCanvas.height = croppedHeight;
+  
+  const ctx = tempCanvas.getContext('2d');
+  if (!ctx) {
+    console.error('[LocalOCR] Failed to get canvas context');
+    return null;
+  }
+
+  // Fill with white background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, croppedWidth, croppedHeight);
+
+  try {
+    // PREFERRED: Pixel-accurate screenshot from the rendered fabric canvas
+    const lowerCanvas = fabricCanvas.lowerCanvasEl;
+    if (!lowerCanvas) {
+      console.error('[LocalOCR] lowerCanvasEl not found, cannot capture screenshot');
+      throw new Error('lowerCanvasEl missing');
+    }
+
+    // Fabric applies retina scaling to the internal canvas; account for it
+    const retina = typeof fabricCanvas.getRetinaScaling === 'function'
+      ? fabricCanvas.getRetinaScaling()
+      : (window.devicePixelRatio || 1);
+
+    // Transform world-space bounds to screen-space (before retina scaling)
+    const tl = fabric.util.transformPoint(new fabric.Point(minX, minY), vpt);
+    const br = fabric.util.transformPoint(new fabric.Point(maxX, maxY), vpt);
+
+    // Convert to canvas pixel coordinates (after retina scaling) and add padding in screen space
+    const padScreen = padding * currentZoom * retina;
+    let sx = Math.floor(tl.x * retina - padScreen);
+    let sy = Math.floor(tl.y * retina - padScreen);
+    let sWidth = Math.ceil((br.x - tl.x) * retina + padScreen * 2);
+    let sHeight = Math.ceil((br.y - tl.y) * retina + padScreen * 2);
+
+    const srcMaxW = lowerCanvas.width;
+    const srcMaxH = lowerCanvas.height;
+
+    // Clamp to source canvas bounds
+    if (sx < 0) { sWidth += sx; sx = 0; }
+    if (sy < 0) { sHeight += sy; sy = 0; }
+    sWidth = Math.max(1, Math.min(sWidth, srcMaxW - sx));
+    sHeight = Math.max(1, Math.min(sHeight, srcMaxH - sy));
+
+    // Destination size in world pixels (unscaled back from screen)
+    const dw = Math.max(1, Math.round(sWidth / (currentZoom * retina)));
+    const dh = Math.max(1, Math.round(sHeight / (currentZoom * retina)));
+
+    // If our temp canvas size doesn't match due to clamping, resize to match
+    if (tempCanvas.width !== dw || tempCanvas.height !== dh) {
+      tempCanvas.width = dw;
+      tempCanvas.height = dh;
+      // reset background after resize
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, dw, dh);
+    }
+
+    // Finally, copy pixels and unscale to world size
+    ctx.drawImage(lowerCanvas, sx, sy, sWidth, sHeight, 0, 0, dw, dh);
+
+    console.log('[LocalOCR] Screenshot crop:', {
+      retina, vptZoom: currentZoom,
+      sx, sy, sWidth, sHeight,
+      dw, dh,
+      srcCanvas: { w: srcMaxW, h: srcMaxH },
+    });
+
+    const finalDataUrl = tempCanvas.toDataURL('image/png');
+    
+    console.log('[LocalOCR] Screenshot captured:', {
+      outputSize: `${tempCanvas.width}x${tempCanvas.height}`,
+      strokesRendered: strokes.length,
+      dataUrlLength: finalDataUrl.length
+    });
+
+    // Return debug metadata along with the image
+    return {
+      dataUrl: finalDataUrl,
+      bounds: { minX, minY, maxX, maxY, padding },
+      debug: {
+        size: `${tempCanvas.width}x${tempCanvas.height}`,
+        corners: {
+          TL: `(${Math.round(minX)}, ${Math.round(minY)})`,
+          TR: `(${Math.round(maxX)}, ${Math.round(minY)})`,
+          BL: `(${Math.round(minX)}, ${Math.round(maxY)})`,
+          BR: `(${Math.round(maxX)}, ${Math.round(maxY)})`,
+        },
+        zoom: currentZoom.toFixed(2),
+        pan: `(${Math.round(panX)}, ${Math.round(panY)})`,
+        strokesRendered: strokes.length
+      }
+    };
+  } catch (error) {
+    console.error('[LocalOCR] Error capturing canvas region:', error);
+    return null;
+  }
+};
+
+// Render strokes to a cropped PNG data URL (OLD METHOD - keeping as fallback)
 const renderStrokesToImage = (strokes = [], options = {}) => {
   const padding = options.padding ?? 16;
   const lineWidth = options.lineWidth ?? 3;
@@ -107,13 +267,30 @@ export const recognizeHandwriting = async (strokes, options = {}) => {
     return { ...cache.get(cacheKey), cached: true };
   }
 
-  // Pass bounds to renderStrokesToImage to clip strokes
-  const renderingOptions = {
-    ...(options.rendering || { padding: 16, lineWidth: 3, scale: 1 }),
-    bounds: options.bounds // Add bounds for clipping
-  };
-  
-  const rendered = renderStrokesToImage(strokes, renderingOptions);
+  let rendered = null;
+
+  // NEW: Try screenshot method first if canvas and bounds are provided
+  if (options.fabricCanvas && options.bounds) {
+    console.log('[LocalOCR] Using screenshot method (fast & accurate)');
+    const renderingOptions = {
+      padding: options.rendering?.padding ?? 16,
+      lineWidth: options.rendering?.lineWidth ?? 3,
+    };
+    
+    rendered = captureCanvasRegion(options.fabricCanvas, options.bounds, strokes, renderingOptions);
+  }
+
+  // Fallback to stroke rendering if screenshot fails or isn't available
+  if (!rendered || !rendered.dataUrl) {
+    console.log('[LocalOCR] Using stroke rendering method (fallback)');
+    const renderingOptions = {
+      ...(options.rendering || { padding: 16, lineWidth: 3, scale: 1 }),
+      bounds: options.bounds
+    };
+    
+    rendered = renderStrokesToImage(strokes, renderingOptions);
+  }
+
   if (!rendered || !rendered.dataUrl) {
     return { latex: '', confidence: 0, error: 'Unable to render strokes for local OCR.', usedFallback: true };
   }
@@ -157,7 +334,17 @@ export const recognizeHandwriting = async (strokes, options = {}) => {
   const latex = (payload?.latex || '').trim();
   const confidence = typeof payload?.confidence === 'number' ? payload.confidence : (latex ? 0.8 : 0);
 
-  const result = { latex, confidence, boxes: payload?.boxes || null, raw: payload, usedFallback: false };
+  const result = { 
+    latex, 
+    confidence, 
+    boxes: payload?.boxes || null, 
+    raw: payload, 
+    usedFallback: false,
+    // Include debug info for preview
+    debugImage: rendered.dataUrl,
+    debugInfo: rendered.debug,
+  };
+  
   if (useCache) cache.set(cacheKey, result);
 
   setOCRStatus({ state: 'connected', message: 'Local OCR ready.' });

@@ -228,7 +228,7 @@ const HandwritingDetector = ({
     }
   }, [canvas, clearHighlight]);
 
-  const updateDebugOverlays = useCallback((groups, activeArea = null) => { // eslint-disable-line no-unused-vars
+  const updateDebugOverlays = useCallback((groups, activeArea = null) => {
     if (!canvas) {
       return;
     }
@@ -237,27 +237,27 @@ const HandwritingDetector = ({
       return;
     }
 
-    // Show active writing area if available - DISABLED to make invisible
-    // if (activeArea) {
-    //   const activeRect = new fabric.Rect({
-    //     left: activeArea.minX,
-    //     top: activeArea.minY,
-    //     width: activeArea.width,
-    //     height: activeArea.height,
-    //     fill: 'rgba(139, 92, 246, 0.05)',
-    //     stroke: '#8b5cf6',
-    //     strokeWidth: 2,
-    //     strokeDashArray: [5, 5],
-    //     selectable: false,
-    //     evented: false,
-    //     excludeFromExport: true,
-    //   });
-    //   canvas.add(activeRect);
-    //   if (typeof activeRect.sendToBack === 'function') {
-    //     activeRect.sendToBack();
-    //   }
-    //   debugOverlayRef.current.push(activeRect);
-    // }
+    // Show active writing area if available
+    if (activeArea) {
+      const activeRect = new fabric.Rect({
+        left: activeArea.minX,
+        top: activeArea.minY,
+        width: activeArea.width,
+        height: activeArea.height,
+        fill: 'rgba(139, 92, 246, 0.05)',
+        stroke: '#8b5cf6',
+        strokeWidth: 2,
+        strokeDashArray: [5, 5],
+        selectable: false,
+        evented: false,
+        excludeFromExport: true,
+      });
+      canvas.add(activeRect);
+      if (typeof activeRect.sendToBack === 'function') {
+        activeRect.sendToBack();
+      }
+      debugOverlayRef.current.push(activeRect);
+    }
 
     ensureArray(groups).forEach((group, index) => {
       if (!group?.bounds) {
@@ -573,12 +573,14 @@ const HandwritingDetector = ({
     const horizontalPadding = equalsHeight * 0.5;
     equationLeftBoundary -= horizontalPadding;
     
-    // Create expanded bounds (horizontal expansion to the left, minimal vertical)
+    // Create expanded bounds (horizontal expansion to the left, MORE vertical for curves)
+    // Increase vertical expansion to accommodate curved text like "cos(20)"
+    const verticalExpansion = verticalTolerance * 2; // Increased from 0.3 to 2 for better curve coverage
     const expandedBounds = {
       minX: equationLeftBoundary,
       maxX: equalsBounds.maxX + horizontalPadding,
-      minY: equalsBounds.minY - verticalTolerance * 0.3,
-      maxY: equalsBounds.maxY + verticalTolerance * 0.3,
+      minY: equalsBounds.minY - verticalExpansion,
+      maxY: equalsBounds.maxY + verticalExpansion,
       get width() { return this.maxX - this.minX; },
       get height() { return this.maxY - this.minY; },
       get centerX() { return (this.minX + this.maxX) / 2; },
@@ -592,9 +594,22 @@ const HandwritingDetector = ({
     // Get strokes within expanded bounds (for the full equation context)
     const equationStrokes = allStrokes.filter((stroke) => {
       const strokeBounds = getStrokeBounds(stroke, analyzer);
-      if (!strokeBounds) return false;
-      return boundsIntersect(strokeBounds, expandedBounds);
+      if (!strokeBounds) {
+        console.warn('[EqualSign] Stroke has no bounds:', stroke.id);
+        return false;
+      }
+      const intersects = boundsIntersect(strokeBounds, expandedBounds);
+      if (!intersects) {
+        console.log('[EqualSign] Stroke outside expanded bounds:', {
+          strokeId: stroke.id,
+          strokeBounds,
+          expandedBounds
+        });
+      }
+      return intersects;
     });
+    
+    console.log(`[EqualSign] Found ${equationStrokes.length} of ${allStrokes.length} total strokes in expanded bounds`);
 
     updateDebugOverlays([], activeArea);
 

@@ -174,6 +174,8 @@ export const recognizeEquationHybrid = async (strokes, options = {}) => {
           cache: getOCRCache(),
           cacheKey: signature,
           bypassCache: options.forceRefresh,
+          fabricCanvas: options.fabricCanvas, // Pass fabric canvas for screenshot
+          bounds: options.bounds, // Pass bounds for cropping
         });
       });
 
@@ -214,6 +216,9 @@ export const recognizeEquationHybrid = async (strokes, options = {}) => {
     durationMs,
     startedAt,
     localResult: local,
+    // Pass through debug info from recognizer
+    debugImage: remoteResult?.debugImage,
+    debugInfo: remoteResult?.debugInfo,
   };
   
   // Cache successful results
