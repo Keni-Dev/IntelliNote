@@ -7,11 +7,9 @@ import CanvasHistory from '../../lib/canvasHistory';
 import StrokeAnalyzer from '../../lib/strokeAnalyzer';
 import { autoOptimizeCanvas, throttle } from '../../lib/canvasOptimizer';
 import { buildContextFromArea } from '../../lib/spatialContext';
-import { generateHandwriting, renderHandwritingToCanvas } from '../../lib/handwritingSynthesis';
-import { getOCRConfig } from '../../config/ocr';
 import { strokeDebugger } from '../../lib/strokeDebugger';
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
+import { latexToHandwrittenFabricImage, createFallbackText, isComplexLatex } from '../../lib/latexToFabricImage';
+import { renderLatexToFabric } from '../../lib/latex'; // New custom SVG renderer
 // Use solver via hook to keep a single engine instance shared with the VariablePanel
 import Toolbar from './Toolbar';
 import GridBackground from './GridBackground';
@@ -306,6 +304,7 @@ const Canvas = forwardRef(({
         points: normalizedPoints,
         features,
         bounds: features.bounds,
+        strokeWidth: path.strokeWidth || 2, // Include strokeWidth from the path object
       };
 
       const strokeMeta = {
@@ -315,6 +314,7 @@ const Canvas = forwardRef(({
         points: normalizedPoints,
         features,
         bounds: features.bounds,
+        strokeWidth: path.strokeWidth || 2, // Include strokeWidth in metadata
       };
 
       if (typeof path.set === 'function') {
@@ -1665,99 +1665,211 @@ const Canvas = forwardRef(({
         // Render solution as handwritten-style text beside the equation strokes
         const bounds = pendingHandwritingRef.current?.bounds || handwritingSuggestion?.bounds;
         
-        // Calculate position: to the right of the equation (or handwriting bounds)
-        let answerX = mathInputPosition.x + 20; // Default: slight offset to the right
+        // Determine if this is a "solve for x" type equation or a direct answer
+        const isSolveFor = /solve|find|what is|calculate/i.test(normalized) || 
+                           /x\s*=|y\s*=|z\s*=/.test(String(result.result));
+        
+        // Calculate position based on type
+        let answerX = mathInputPosition.x + 20;
         let answerY = mathInputPosition.y;
         
         if (bounds) {
-          // Place answer to the right of the rightmost point of the handwriting
-          answerX = bounds.maxX + 20; // Increased spacing
-          answerY = bounds.centerY - 8; // Center vertically with slight upward offset
+          if (isSolveFor) {
+            // For "solve for x": Place answer below the equation
+            answerX = bounds.minX;
+            answerY = bounds.maxY + 15; // Below with small gap
+          } else {
+            // For direct answers: Place to the right of the equals sign
+            answerX = bounds.maxX + 15; // Right side with spacing
+            answerY = bounds.centerY; // Vertically centered
+          }
         }
         
-        // Calculate average stroke height for size matching
-        const calculateAverageStrokeHeight = (strokes) => {
-          if (!strokes || strokes.length === 0) return 40; // Default fallback
+        // Calculate average stroke height and brush size for size matching
+        const calculateStrokeMeasurements = (strokes) => {
+          if (!strokes || strokes.length === 0) {
+            return { avgHeight: 40, avgWidth: 30, avgBrushSize: 2 };
+          }
           
-          const heights = strokes
+          const measurements = strokes
             .map(stroke => {
               const bounds = stroke.bounds || stroke.features?.bounds;
-              return bounds ? bounds.height : 0;
+              const brushSize = stroke.brushSize || stroke.strokeWidth || 2;
+              return bounds ? { 
+                height: bounds.height, 
+                width: bounds.width,
+                brushSize: brushSize
+              } : null;
             })
-            .filter(h => h > 0);
+            .filter(m => m && m.height > 0 && m.width > 0);
           
-          if (heights.length === 0) return 40;
+          if (measurements.length === 0) {
+            return { avgHeight: 40, avgWidth: 30, avgBrushSize: 2 };
+          }
           
-          // Remove outliers (too small - like horizontal bars)
+          // Get heights, widths, and brush sizes separately
+          const heights = measurements.map(m => m.height);
+          const widths = measurements.map(m => m.width);
+          const brushSizes = measurements.map(m => m.brushSize);
+          
+          // Remove outliers (too small - like dots or horizontal bars)
+          // We use the median of the middle 50% for more robust calculation
           heights.sort((a, b) => a - b);
+          widths.sort((a, b) => a - b);
+          brushSizes.sort((a, b) => a - b);
+          
           const q1Index = Math.floor(heights.length * 0.25);
           const q3Index = Math.floor(heights.length * 0.75);
           const filteredHeights = heights.slice(q1Index, q3Index + 1);
+          const filteredWidths = widths.slice(q1Index, q3Index + 1);
+          const filteredBrushSizes = brushSizes.slice(q1Index, q3Index + 1);
           
-          // Calculate average
-          const avg = filteredHeights.reduce((sum, h) => sum + h, 0) / filteredHeights.length;
-          return avg;
+          // Calculate median instead of average for better outlier resistance
+          const medianHeight = filteredHeights[Math.floor(filteredHeights.length / 2)];
+          const medianWidth = filteredWidths[Math.floor(filteredWidths.length / 2)];
+          const medianBrushSize = filteredBrushSizes[Math.floor(filteredBrushSizes.length / 2)];
+          
+          return { 
+            avgHeight: medianHeight, 
+            avgWidth: medianWidth,
+            avgBrushSize: medianBrushSize
+          };
         };
         
         // Get strokes from handwriting suggestion or pending ref
-        const strokes = handwritingSuggestion?.strokes || pendingHandwritingRef.current?.strokes || [];
+        let strokes = handwritingSuggestion?.strokes || pendingHandwritingRef.current?.strokes || [];
+
+        if ((!strokes || strokes.length === 0) && pendingHandwritingRef.current?.strokeIds?.length) {
+          const allStrokes = Array.isArray(strokesRef.current) ? strokesRef.current : [];
+          strokes = pendingHandwritingRef.current.strokeIds
+            .map(id => allStrokes.find(stroke => stroke?.id === id))
+            .filter(Boolean);
+        }
         
         console.log('[Canvas] Found', strokes.length, 'strokes for size calculation');
         
-        const avgHeight = calculateAverageStrokeHeight(strokes);
+        const { avgHeight, avgWidth, avgBrushSize } = calculateStrokeMeasurements(strokes);
         
         // Calculate font size based on average stroke height
-        // Multiply by 2.0 to make it more visible and match handwriting better
-        const calculatedFontSize = Math.max(48, Math.min(150, avgHeight * 2.0));
+        // REDUCED scaling for more reasonable size
+        const heightFactor = 1.0; // Reduced from 1.8 for better proportion
+        const widthInfluence = 0.15; // Reduced width influence
         
-        console.log('[Canvas] Average stroke height:', avgHeight, 'Calculated font size:', calculatedFontSize);
-        console.log('[Canvas] Answer position: x=', answerX, 'y=', answerY);
+        const calculatedFontSize = Math.max(
+          24, // Minimum size reduced from 48
+          Math.min(
+            80, // Maximum size reduced from 150
+            avgHeight * heightFactor + avgWidth * widthInfluence
+          )
+        );
         
-        // Get the result as LaTeX
-        let latexResult = typeof result.result === 'number' 
+        console.log('[Canvas] Stroke measurements:', { avgHeight, avgWidth, avgBrushSize });
+        console.log('[Canvas] Calculated font size:', calculatedFontSize);
+        console.log('[Canvas] Answer position: x=', answerX, 'y=', answerY, 'isSolveFor:', isSolveFor);
+        
+        // Get the result as LaTeX (preserve LaTeX for proper rendering)
+        const latexResult = typeof result.result === 'number' 
           ? result.result.toString()
           : String(result.result);
         
-        // Parse LaTeX to more readable format
-        let displayText = latexResult;
-        // Handle fractions: \frac{a}{b} -> a/b
-        displayText = displayText.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '$1/$2');
-        // Handle square roots: \sqrt{x} -> √x  
-        displayText = displayText.replace(/\\sqrt\{([^}]+)\}/g, '√$1');
-        // Handle powers with braces: x^{2} -> x²
-        displayText = displayText.replace(/\^{2}/g, '²');
-        displayText = displayText.replace(/\^{3}/g, '³');
-        // Remove LaTeX commands
-        displayText = displayText.replace(/\\left|\\right/g, '');
-        displayText = displayText.replace(/\\\\/g, '');
-        
-        console.log('[Canvas] Rendering answer:', displayText, 'with font size:', calculatedFontSize);
-        
-        // Create text object with calculated size
-        const answerObject = new fabric.IText(displayText, {
-          left: answerX,
-          top: answerY,
-          fill: '#eab308', // Yellow color
-          fontSize: calculatedFontSize,
-          fontFamily: "'Gochi Hand', 'Kalam', 'Patrick Hand', cursive",
-          fontWeight: 'normal',
-          customType: 'mathAnswer',
-          selectable: true,
-          editable: false,
-        });
-        
-        console.log('[Canvas] Created answer object:', answerObject);
-        
-        if (answerObject) {
+        console.log('[Canvas] Rendering answer:', latexResult, 'with font size:', calculatedFontSize);
+
+        const placeAnswerObject = (answerObject) => {
+          if (!answerObject) {
+            return;
+          }
+
+          answerObject.set({
+            originX: 'left',
+            originY: 'top',
+            selectable: true,
+            erasable: true,
+            hasControls: true,
+            hasBorders: true,
+            name: 'math-answer',
+            customType: 'mathAnswer',
+          });
+
+          const targetHeight = (() => {
+            if (bounds && Number.isFinite(bounds.height) && bounds.height > 0) {
+              return bounds.height;
+            }
+            return Math.max(avgHeight || 0, calculatedFontSize);
+          })();
+
+          const currentHeight = typeof answerObject.getScaledHeight === 'function'
+            ? answerObject.getScaledHeight()
+            : (answerObject.height || calculatedFontSize);
+
+          if (targetHeight > 0 && currentHeight > 0) {
+            const scaleFactor = Math.min(3, Math.max(0.4, targetHeight / currentHeight));
+            console.log('[Canvas] Scaling math answer', {
+              currentHeight,
+              targetHeight,
+              scaleFactor,
+            });
+            if (typeof answerObject.scale === 'function') {
+              answerObject.scale(scaleFactor);
+            } else {
+              answerObject.set({
+                scaleX: scaleFactor,
+                scaleY: scaleFactor,
+              });
+            }
+          }
+
+          answerObject.setCoords();
+
+          const scaledHeight = typeof answerObject.getScaledHeight === 'function'
+            ? answerObject.getScaledHeight()
+            : (answerObject.height || calculatedFontSize) * (answerObject.scaleY || 1);
+
+          const scaledWidth = typeof answerObject.getScaledWidth === 'function'
+            ? answerObject.getScaledWidth()
+            : (answerObject.width || calculatedFontSize) * (answerObject.scaleX || 1);
+
+          let finalLeft = answerX;
+          let finalTop = answerY;
+
+          if (bounds) {
+            const horizontalGap = Math.max(18, (bounds.width || avgWidth || 30) * 0.25);
+            const verticalGap = Math.max(14, (avgHeight || 30) * 0.35);
+
+            if (isSolveFor) {
+              finalLeft = bounds.minX ?? answerX;
+              finalTop = (bounds.maxY ?? answerY) + verticalGap;
+            } else {
+              finalLeft = (bounds.maxX ?? answerX) + horizontalGap;
+              const centerY = bounds.centerY ?? ((bounds.minY ?? 0) + (bounds.maxY ?? 0)) / 2;
+              if (Number.isFinite(centerY) && Number.isFinite(scaledHeight)) {
+                finalTop = centerY - scaledHeight / 2;
+              }
+            }
+          }
+
+          // Ensure final positions are finite numbers
+          if (!Number.isFinite(finalLeft)) finalLeft = answerX;
+          if (!Number.isFinite(finalTop)) finalTop = answerY;
+
+          answerObject.set({ left: finalLeft, top: finalTop });
+          answerObject.setCoords();
           canvas.add(answerObject);
           canvas.requestRenderAll();
-          console.log('[Canvas] Answer added to canvas at', answerX, answerY);
-        } else {
-          console.error('[Canvas] Failed to create answer object');
-        }
 
-        // Optionally show a small solution panel for steps (but don't duplicate the equation)
-        if (result.steps && result.steps.length > 0) {
+          console.log('[Canvas] Math answer placed', {
+            finalLeft,
+            finalTop,
+            scaledWidth,
+            scaledHeight,
+            scaleX: answerObject.scaleX,
+            scaleY: answerObject.scaleY,
+          });
+
+          return answerObject;
+        };
+
+        // Helper function to create solution panel - DEFINED BEFORE USAGE
+        const createSolutionPanel = (answerObject, resultData) => {
           const viewportWidth = window.innerWidth;
           const viewportHeight = window.innerHeight;
           
@@ -1772,19 +1884,19 @@ const Canvas = forwardRef(({
             panelY = Math.max(100, viewportHeight - 400);
           }
           
-          const confidence = calculateConfidence(result, result.context);
+          const confidence = calculateConfidence(resultData, resultData.context);
 
           const newSolution = {
             id: Date.now(),
             equation: normalized,
-            result: result.result,
-            steps: result.steps || [],
+            result: resultData.result,
+            steps: resultData.steps || [],
             variables: getStoredVariables(),
-            context: result.context,
-            suggestions: result.suggestions || [],
+            context: resultData.context,
+            suggestions: resultData.suggestions || [],
             confidence: confidence,
             position: { x: panelX, y: panelY },
-            sourceObject: answerObject,
+            sourceObject: answerObject, // Reference to the fabric.js text or image object
             analysis,
             llmStatus: 'idle',
             llmProvider: 'openrouter/andromeda-alpha',
@@ -1794,7 +1906,110 @@ const Canvas = forwardRef(({
           };
 
           setMathSolutions(prev => [...prev, newSolution]);
-        }
+        };
+        
+        // Use new custom SVG renderer for all math
+        console.log('[Canvas] Rendering LaTeX with custom SVG renderer');
+        console.log('[Canvas] Parameters - fontSize:', calculatedFontSize, 'strokeWidth:', avgBrushSize, 'latex:', latexResult);
+        
+        renderLatexToFabric({
+          latex: latexResult,
+          fontSize: calculatedFontSize,
+          strokeWidth: avgBrushSize,
+          color: '#eab308',
+          fontFamily: "'Gochi Hand', 'Kalam', 'Architects Daughter', cursive",
+          debug: false,
+        }).then(fabricImg => {
+          console.log('[Canvas] fabricImg dimensions:', {
+            width: fabricImg.width,
+            height: fabricImg.height,
+            scaleX: fabricImg.scaleX,
+            scaleY: fabricImg.scaleY,
+          });
+
+          const placed = placeAnswerObject(fabricImg);
+
+          if (placed && result.steps && result.steps.length > 0) {
+            createSolutionPanel(placed, result);
+          }
+        }).catch(error => {
+          console.error('[Canvas] Custom SVG renderer failed, using fallback:', error);
+          
+          // Fallback 1: Try old html2canvas renderer if complex
+          const needsDisplayMode = isComplexLatex(latexResult);
+          
+          if (needsDisplayMode) {
+            latexToHandwrittenFabricImage({
+              latex: latexResult,
+              fontSize: calculatedFontSize,
+              color: '#eab308',
+              fontFamily: "'Gochi Hand', 'Kalam', 'Architects Daughter', cursive",
+              maxWidth: 600,
+              padding: 5,
+              strokeWidth: avgBrushSize,
+            }).then(fabricImg => {
+              const placed = placeAnswerObject(fabricImg);
+
+              if (placed && result.steps && result.steps.length > 0) {
+                createSolutionPanel(placed, result);
+              }
+            }).catch(fallbackError => {
+              console.error('[Canvas] HTML2Canvas fallback also failed:', fallbackError);
+              
+              // Final fallback: simple text
+              const fallbackText = createFallbackText({
+                text: latexResult.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1)/($2)')
+                                   .replace(/\\sqrt\{([^}]+)\}/g, '√$1')
+                                   .replace(/\^{2}/g, '²')
+                                   .replace(/\^{3}/g, '³')
+                                   .replace(/\\left|\\right/g, '')
+                                   .replace(/\\\\/g, ''),
+                fontSize: calculatedFontSize,
+                color: '#eab308',
+                fontFamily: "'Gochi Hand', 'Kalam', 'Patrick Hand', cursive",
+              });
+              
+              const placed = placeAnswerObject(fallbackText);
+
+              if (placed && result.steps && result.steps.length > 0) {
+                createSolutionPanel(placed, result);
+              }
+            });
+          } else {
+            // Fallback 2: Simple text for non-complex LaTeX
+            let displayText = latexResult;
+            displayText = displayText.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1)/($2)');
+            displayText = displayText.replace(/\\sqrt\{([^}]+)\}/g, '√$1');
+            displayText = displayText.replace(/\^{2}/g, '²');
+            displayText = displayText.replace(/\^{3}/g, '³');
+            displayText = displayText.replace(/\\left|\\right/g, '');
+            displayText = displayText.replace(/\\\\/g, '');
+            
+            const answerObject = new fabric.IText(displayText, {
+              left: answerX,
+              top: answerY,
+              fill: '#eab308',
+              fontSize: calculatedFontSize,
+              fontFamily: "'Gochi Hand', 'Kalam', 'Patrick Hand', cursive",
+              fontWeight: 'normal',
+              stroke: '#eab308',
+              strokeWidth: Math.max(0.5, avgBrushSize * 0.3),
+              paintFirst: 'fill',
+              customType: 'mathAnswer',
+              selectable: true,
+              editable: false,
+              erasable: true,
+            });
+            
+            if (answerObject) {
+              const placed = placeAnswerObject(answerObject);
+
+              if (placed && result.steps && result.steps.length > 0) {
+                createSolutionPanel(placed, result);
+              }
+            }
+          }
+        });
       }
     }
     

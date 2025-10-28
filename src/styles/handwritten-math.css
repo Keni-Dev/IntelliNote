@@ -365,6 +365,99 @@
 }
 
 /* ==========================================
+   MATH ANSWER OVERLAY STYLES
+   ========================================== */
+
+.handwritten-math-answer {
+  font-family: 'Gochi Hand', 'Kalam', 'Architects Daughter', cursive;
+  font-weight: normal;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Apply handwriting font to KaTeX elements */
+.handwritten-math-answer .katex,
+.handwritten-math-answer .katex-html,
+.handwritten-math-answer .mord,
+.handwritten-math-answer .mbin,
+.handwritten-math-answer .mrel,
+.handwritten-math-answer .mop,
+.handwritten-math-answer .mpunct,
+.handwritten-math-answer .minner {
+  font-family: 'Gochi Hand', 'Kalam', 'Architects Daughter', cursive !important;
+  font-weight: normal !important;
+}
+
+/* Style numbers and text in handwriting font */
+.handwritten-math-answer .mord.mathnormal,
+.handwritten-math-answer .mord.text {
+  font-family: 'Gochi Hand', 'Kalam', cursive !important;
+}
+
+/* Custom SVG symbols */
+.handwritten-math-answer .custom-math-symbol {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.handwritten-math-answer .custom-math-symbol svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Remove KaTeX's default font styling */
+.handwritten-math-answer .katex .base {
+  font-family: inherit !important;
+}
+
+/* Ensure superscripts and subscripts use handwriting font */
+.handwritten-math-answer .msupsub {
+  font-family: 'Gochi Hand', 'Kalam', cursive !important;
+}
+
+/* Style fractions with handwriting */
+.handwritten-math-answer .mfrac {
+  font-family: 'Gochi Hand', 'Kalam', cursive !important;
+}
+
+.handwritten-math-answer .frac-line {
+  border-bottom: 2px solid currentColor !important;
+  /* Hand-drawn effect */
+  border-image: linear-gradient(
+    to right,
+    transparent 0%,
+    currentColor 5%,
+    currentColor 95%,
+    transparent 100%
+  ) 1 !important;
+}
+
+/* Add subtle animation on appear */
+@keyframes answerFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.handwritten-math-answer {
+  animation: answerFadeIn 0.3s ease-out;
+}
+
+/* Add ink texture effect */
+.handwritten-math-answer {
+  filter: contrast(1.02) brightness(0.98);
+  text-shadow: 
+    0 0 0.5px currentColor,
+    0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+/* ==========================================
    PRINT STYLES
    ========================================== */
 

@@ -15,6 +15,7 @@
     "dexie": "^4.2.1",
     "fabric": "^6.7.1",
     "framer-motion": "^12.23.24",
+    "html2canvas": "^1.4.1",
     "katex": "^0.16.25",
     "lodash": "^4.17.21",
     "lucide-react": "^0.546.0",
