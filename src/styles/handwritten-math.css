@@ -1,0 +1,419 @@
+/**
+ * Handwritten Math Styling
+ * 
+ * CSS for rendering math in handwritten style like Apple Notes
+ * 
+ * Features:
+ * - Slight rotation variance for natural handwriting feel
+ * - Ink texture filters for authentic appearance
+ * - Subtle animations on hover
+ * - Smooth transitions
+ * - Hand-drawn effects with subtle imperfections
+ */
+
+/* ==========================================
+   BASE STYLES
+   ========================================== */
+
+.handwritten-math {
+  font-family: 'Gochi Hand', 'Kalam', 'Architects Daughter', cursive;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.handwritten-math.inline-mode {
+  display: inline;
+  vertical-align: baseline;
+}
+
+.handwritten-math.block-mode {
+  display: block;
+  text-align: center;
+  margin: 1.5rem 0;
+  padding: 1rem 0;
+}
+
+/* ==========================================
+   HANDWRITTEN TEXT STYLES
+   ========================================== */
+
+.handwritten-text {
+  display: inline-block;
+  transform-origin: center bottom;
+  transition: transform 0.15s ease;
+}
+
+/* Add subtle rotation variance for natural look */
+.handwritten-text:nth-child(odd) {
+  transform: rotate(-0.3deg) translateY(-0.5px);
+}
+
+.handwritten-text:nth-child(even) {
+  transform: rotate(0.3deg) translateY(0.5px);
+}
+
+.handwritten-text:nth-child(3n) {
+  transform: rotate(0.1deg);
+}
+
+.handwritten-text:nth-child(5n) {
+  transform: rotate(-0.2deg);
+}
+
+/* ==========================================
+   GREEK LETTERS
+   ========================================== */
+
+.handwritten-greek {
+  font-family: 'Gochi Hand', cursive;
+  display: inline-block;
+  transform-origin: center bottom;
+  font-weight: 400;
+}
+
+.handwritten-greek:nth-child(odd) {
+  transform: rotate(-0.4deg);
+}
+
+.handwritten-greek:nth-child(even) {
+  transform: rotate(0.4deg);
+}
+
+/* ==========================================
+   SVG SYMBOLS
+   ========================================== */
+
+.handwritten-svg-symbol {
+  display: inline-block;
+  vertical-align: middle;
+  transform-origin: center;
+  transition: transform 0.2s ease;
+}
+
+.handwritten-svg-symbol svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.handwritten-svg-symbol:hover {
+  transform: scale(1.05);
+}
+
+/* Add subtle animation to SVG symbols */
+.handwritten-svg-symbol path,
+.handwritten-svg-symbol line,
+.handwritten-svg-symbol ellipse,
+.handwritten-svg-symbol circle {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke-width 0.2s ease;
+}
+
+/* ==========================================
+   SUPERSCRIPTS & SUBSCRIPTS
+   ========================================== */
+
+.handwritten-superscript {
+  font-size: 0.7em;
+  vertical-align: super;
+  line-height: 0;
+  margin-left: 0.1em;
+}
+
+.handwritten-subscript {
+  font-size: 0.7em;
+  vertical-align: sub;
+  line-height: 0;
+  margin-left: 0.1em;
+}
+
+/* ==========================================
+   FRACTIONS
+   ========================================== */
+
+.handwritten-fraction {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: middle;
+  margin: 0 0.2em;
+  line-height: 1.2;
+}
+
+.handwritten-fraction > span {
+  display: block;
+}
+
+.handwritten-fraction > span:first-child {
+  border-bottom: 2px solid currentColor;
+  padding-bottom: 0.1em;
+  /* Slight imperfection in line */
+  border-image: linear-gradient(
+    to right,
+    transparent 0%,
+    currentColor 5%,
+    currentColor 95%,
+    transparent 100%
+  ) 1;
+}
+
+.handwritten-fraction > span:last-child {
+  padding-top: 0.1em;
+}
+
+/* ==========================================
+   SQUARE ROOTS
+   ========================================== */
+
+.handwritten-sqrt {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  margin: 0 0.2em;
+}
+
+.handwritten-sqrt > span {
+  border-top: 2px solid currentColor;
+  padding-left: 0.2em;
+  padding-right: 0.2em;
+  padding-top: 0.1em;
+  /* Slight imperfection in line */
+  border-image: linear-gradient(
+    to right,
+    currentColor 0%,
+    currentColor 95%,
+    transparent 100%
+  ) 1;
+}
+
+/* Root index (for cube root, etc.) */
+.handwritten-sqrt sup {
+  font-size: 0.6em;
+  position: absolute;
+  left: -0.3em;
+  top: -0.5em;
+}
+
+/* ==========================================
+   OPERATORS (INTEGRALS, SUMMATIONS, ETC.)
+   ========================================== */
+
+.handwritten-operator {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0 0.3em;
+  position: relative;
+  vertical-align: middle;
+}
+
+.handwritten-operator > span:first-child {
+  font-size: 0.6em;
+  margin-bottom: -0.2em;
+}
+
+.handwritten-operator > span:last-child {
+  font-size: 0.6em;
+  margin-top: -0.2em;
+}
+
+/* ==========================================
+   HOVER EFFECTS
+   ========================================== */
+
+.handwritten-math:hover .handwritten-text {
+  transform: rotate(0deg) translateY(0) scale(1.02);
+}
+
+.handwritten-math:hover .handwritten-greek {
+  transform: rotate(0deg) scale(1.02);
+}
+
+.handwritten-math:hover .handwritten-svg-symbol {
+  transform: scale(1.08);
+}
+
+/* ==========================================
+   INK TEXTURE EFFECT
+   ========================================== */
+
+.handwritten-math {
+  /* Subtle texture filter for ink effect */
+  filter: 
+    contrast(1.02)
+    brightness(0.98);
+}
+
+/* Add slight blur to edges for pen texture */
+.handwritten-text,
+.handwritten-greek,
+.handwritten-fallback {
+  text-shadow: 
+    0 0 0.5px currentColor,
+    0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+/* ==========================================
+   ANIMATIONS
+   ========================================== */
+
+@keyframes handwritingAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.95) rotate(-1deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.handwritten-math {
+  animation: handwritingAppear 0.3s ease-out;
+}
+
+/* Fade in animation for individual characters */
+@keyframes characterFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.handwritten-text {
+  animation: characterFadeIn 0.2s ease-out;
+  animation-fill-mode: backwards;
+}
+
+/* Stagger the animations */
+.handwritten-text:nth-child(1) { animation-delay: 0.02s; }
+.handwritten-text:nth-child(2) { animation-delay: 0.04s; }
+.handwritten-text:nth-child(3) { animation-delay: 0.06s; }
+.handwritten-text:nth-child(4) { animation-delay: 0.08s; }
+.handwritten-text:nth-child(5) { animation-delay: 0.10s; }
+.handwritten-text:nth-child(6) { animation-delay: 0.12s; }
+.handwritten-text:nth-child(7) { animation-delay: 0.14s; }
+.handwritten-text:nth-child(8) { animation-delay: 0.16s; }
+.handwritten-text:nth-child(9) { animation-delay: 0.18s; }
+.handwritten-text:nth-child(10) { animation-delay: 0.20s; }
+
+/* ==========================================
+   PRESSURE VARIATION (SIMULATED)
+   ========================================== */
+
+/* Simulate pen pressure with slightly varying stroke widths */
+.handwritten-svg-symbol:nth-child(odd) path {
+  stroke-width: 2.6;
+}
+
+.handwritten-svg-symbol:nth-child(even) path {
+  stroke-width: 2.4;
+}
+
+.handwritten-svg-symbol:nth-child(3n) path {
+  stroke-width: 2.5;
+}
+
+/* ==========================================
+   RESPONSIVE SIZING
+   ========================================== */
+
+@media (max-width: 768px) {
+  .handwritten-math.block-mode {
+    font-size: 0.95em;
+    margin: 1rem 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .handwritten-math.block-mode {
+    font-size: 0.9em;
+    margin: 0.75rem 0;
+  }
+}
+
+/* ==========================================
+   FALLBACK STYLES
+   ========================================== */
+
+.handwritten-fallback {
+  font-family: 'Gochi Hand', 'Kalam', 'STIX Two Math', 'Cambria Math', serif;
+  display: inline-block;
+}
+
+/* ==========================================
+   SOLUTION DISPLAY SPECIFIC STYLES
+   ========================================== */
+
+.handwritten-solution {
+  color: inherit;
+  transition: all 0.2s ease;
+}
+
+/* Make answer stand out with subtle glow */
+.handwritten-solution.answer-highlight {
+  text-shadow: 
+    0 0 2px currentColor,
+    0 0 4px rgba(255, 255, 255, 0.3);
+}
+
+/* ==========================================
+   PRINT STYLES
+   ========================================== */
+
+@media print {
+  .handwritten-math {
+    filter: none;
+    animation: none;
+  }
+  
+  .handwritten-text,
+  .handwritten-greek,
+  .handwritten-svg-symbol {
+    transform: none !important;
+    animation: none;
+  }
+  
+  .handwritten-text,
+  .handwritten-greek {
+    text-shadow: none;
+  }
+}
+
+/* ==========================================
+   ACCESSIBILITY
+   ========================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .handwritten-math,
+  .handwritten-text,
+  .handwritten-greek,
+  .handwritten-svg-symbol {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  .handwritten-math {
+    filter: none;
+  }
+  
+  .handwritten-text,
+  .handwritten-greek {
+    text-shadow: none;
+  }
+  
+  .handwritten-svg-symbol path,
+  .handwritten-svg-symbol line {
+    stroke-width: 3;
+  }
+}

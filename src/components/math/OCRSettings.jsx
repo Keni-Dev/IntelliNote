@@ -35,19 +35,19 @@ import { recognizeEquationHybrid } from '../../lib/handwritingOCR';
 
 const MODE_OPTIONS = [
   {
+    value: 'cloud',
+    label: 'Cloud only (Recommended)',
+    description: 'Uses TrOCR service for maximum accuracy.',
+  },
+  {
     value: 'local',
     label: 'Local only',
     description: 'Fast, offline glyph analysis only.',
   },
   {
-    value: 'cloud',
-    label: 'Cloud only',
-    description: 'Always call the selected cloud provider for maximum accuracy.',
-  },
-  {
     value: 'hybrid',
     label: 'Hybrid',
-    description: 'Start local, fallback to cloud provider under confidence threshold.',
+    description: 'Start local, fallback to cloud under confidence threshold.',
   },
 ];
 
@@ -329,8 +329,8 @@ const OCRSettings = () => {
         <p className="text-sm text-white/70">Cloud provider</p>
         <div className="flex flex-wrap gap-3">
           {[
-            { value: 'openrouter', label: 'OpenRouter (Vision LLM)', description: 'Vision LLM transcribes strokes to LaTeX.' },
-            { value: 'local', label: 'Local TrOCR', description: 'Local Python service using TrOCR to transcribe math.' },
+            { value: 'local', label: 'TrOCR (Cloud)', description: 'Local Python service using TrOCR for math recognition (default).' },
+            { value: 'openrouter', label: 'OpenRouter (Future)', description: 'Vision LLM integration (planned for future releases).' },
           ].map((option) => (
             <GlassButton
               key={option.value}
