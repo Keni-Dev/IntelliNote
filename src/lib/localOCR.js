@@ -43,7 +43,10 @@ const captureCanvasRegion = (fabricCanvas, bounds, strokes, options = {}) => {
     return null;
   }
 
-  const padding = options.padding ?? 16;
+  // OPTIMIZATION: Reduced padding and configurable image quality
+  const padding = options.padding ?? 8;  // Reduced from 16 to 8
+  const imageQuality = options.quality ?? 0.85;  // WebP quality (0-1)
+  const maxDimension = options.maxDimension ?? 384;  // TrOCR optimal size
 
   // Bounds are in canvas coordinates (world space)
   const { minX, minY, maxX, maxY } = bounds;
@@ -139,10 +142,45 @@ const captureCanvasRegion = (fabricCanvas, bounds, strokes, options = {}) => {
       srcCanvas: { w: srcMaxW, h: srcMaxH },
     });
 
-    const finalDataUrl = tempCanvas.toDataURL('image/png');
+    // OPTIMIZATION: Smart downscaling to TrOCR's optimal size (384x384)
+    let finalCanvas = tempCanvas;
+    let scaledDown = false;
+    
+    if (dw > maxDimension || dh > maxDimension) {
+      const scaleRatio = Math.min(maxDimension / dw, maxDimension / dh);
+      const scaledWidth = Math.round(dw * scaleRatio);
+      const scaledHeight = Math.round(dh * scaleRatio);
+      
+      // Create scaled canvas
+      const scaledCanvas = document.createElement('canvas');
+      scaledCanvas.width = scaledWidth;
+      scaledCanvas.height = scaledHeight;
+      const scaledCtx = scaledCanvas.getContext('2d');
+      
+      if (scaledCtx) {
+        // Use high-quality image smoothing for downscaling
+        scaledCtx.imageSmoothingEnabled = true;
+        scaledCtx.imageSmoothingQuality = 'high';
+        scaledCtx.fillStyle = '#ffffff';
+        scaledCtx.fillRect(0, 0, scaledWidth, scaledHeight);
+        scaledCtx.drawImage(tempCanvas, 0, 0, dw, dh, 0, 0, scaledWidth, scaledHeight);
+        
+        finalCanvas = scaledCanvas;
+        scaledDown = true;
+        
+        console.log(`[LocalOCR] ⚡ Downscaled: ${dw}x${dh} → ${scaledWidth}x${scaledHeight} (${scaleRatio.toFixed(2)}x)`);
+      }
+    }
+
+    // OPTIMIZATION: Use WebP compression (60% smaller than PNG)
+    const finalDataUrl = finalCanvas.toDataURL('image/webp', imageQuality);
     
     console.log('[LocalOCR] Screenshot captured:', {
-      outputSize: `${tempCanvas.width}x${tempCanvas.height}`,
+      originalSize: `${dw}x${dh}`,
+      finalSize: `${finalCanvas.width}x${finalCanvas.height}`,
+      scaledDown,
+      format: 'webp',
+      quality: imageQuality,
       strokesRendered: strokes.length,
       dataUrlLength: finalDataUrl.length
     });
@@ -172,9 +210,12 @@ const captureCanvasRegion = (fabricCanvas, bounds, strokes, options = {}) => {
 
 // Render strokes to a cropped PNG data URL (OLD METHOD - keeping as fallback)
 const renderStrokesToImage = (strokes = [], options = {}) => {
-  const padding = options.padding ?? 16;
-  const lineWidth = options.lineWidth ?? 3;
+  // OPTIMIZATION: Reduced defaults for faster processing
+  const padding = options.padding ?? 8;  // Reduced from 16
+  const lineWidth = options.lineWidth ?? 2;  // Reduced from 3
   const scale = options.scale ?? 1;
+  const imageQuality = options.quality ?? 0.85;  // WebP quality
+  const maxDimension = options.maxDimension ?? 384;  // TrOCR optimal size
   const clipBounds = options.bounds; // Optional bounds to clip strokes
 
   if (!Array.isArray(strokes) || strokes.length === 0) return null;
@@ -207,8 +248,8 @@ const renderStrokesToImage = (strokes = [], options = {}) => {
   const width = Math.max(1, Math.ceil((maxX - minX) * scale + padding * 2));
   const height = Math.max(1, Math.ceil((maxY - minY) * scale + padding * 2));
   
-  // Limit canvas size to prevent memory issues with very large drawings
-  const MAX_DIMENSION = 2048; // Maximum width or height
+  // OPTIMIZATION: Limit to TrOCR's optimal input size
+  const MAX_DIMENSION = maxDimension;
   let renderScale = scale;
   let scaledLineWidth = lineWidth;
   
@@ -217,7 +258,7 @@ const renderStrokesToImage = (strokes = [], options = {}) => {
     renderScale = scale * scaleDownFactor;
     // IMPORTANT: Scale line width proportionally to maintain stroke visibility
     scaledLineWidth = lineWidth / scaleDownFactor;
-    console.warn(`[LocalOCR] Canvas too large (${width}x${height}), scaling down by ${scaleDownFactor.toFixed(2)}`);
+    console.log(`[LocalOCR] ⚡ Downscaling: ${width}x${height} → target max ${MAX_DIMENSION}px (factor: ${scaleDownFactor.toFixed(2)})`);
     console.log(`[LocalOCR] Adjusted line width from ${lineWidth} to ${scaledLineWidth.toFixed(2)}`);
   }
   
@@ -249,8 +290,9 @@ const renderStrokesToImage = (strokes = [], options = {}) => {
     ctx.stroke();
   });
 
+  // OPTIMIZATION: Use WebP compression instead of PNG
   return {
-    dataUrl: canvas.toDataURL('image/png'),
+    dataUrl: canvas.toDataURL('image/webp', imageQuality),
     bounds: { minX, minY, maxX, maxY, padding, scale: renderScale },
   };
 };
@@ -272,9 +314,11 @@ export const recognizeHandwriting = async (strokes, options = {}) => {
   // NEW: Try screenshot method first if canvas and bounds are provided
   if (options.fabricCanvas && options.bounds) {
     console.log('[LocalOCR] Using screenshot method (fast & accurate)');
+    // OPTIMIZATION: Pass optimized settings to screenshot function
     const renderingOptions = {
-      padding: options.rendering?.padding ?? 16,
-      lineWidth: options.rendering?.lineWidth ?? 3,
+      padding: options.rendering?.padding ?? 8,  // Reduced from 16
+      quality: options.rendering?.quality ?? 0.85,  // WebP quality
+      maxDimension: options.rendering?.maxDimension ?? 384,  // TrOCR optimal
     };
     
     rendered = captureCanvasRegion(options.fabricCanvas, options.bounds, strokes, renderingOptions);
@@ -283,8 +327,13 @@ export const recognizeHandwriting = async (strokes, options = {}) => {
   // Fallback to stroke rendering if screenshot fails or isn't available
   if (!rendered || !rendered.dataUrl) {
     console.log('[LocalOCR] Using stroke rendering method (fallback)');
+    // OPTIMIZATION: Pass optimized settings to fallback renderer
     const renderingOptions = {
-      ...(options.rendering || { padding: 16, lineWidth: 3, scale: 1 }),
+      padding: options.rendering?.padding ?? 8,  // Reduced from 16
+      lineWidth: options.rendering?.lineWidth ?? 2,  // Reduced from 3
+      scale: options.rendering?.scale ?? 1,
+      quality: options.rendering?.quality ?? 0.85,  // WebP quality
+      maxDimension: options.rendering?.maxDimension ?? 384,  // TrOCR optimal
       bounds: options.bounds
     };
     

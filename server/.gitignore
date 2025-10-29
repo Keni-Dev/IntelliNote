@@ -16,7 +16,7 @@ media
 venv/
 env/
 ENV/
-
+.venv
 # OCR saved images
 ocr_images/
 *.png
