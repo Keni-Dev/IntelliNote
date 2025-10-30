@@ -30,8 +30,9 @@ export default function HandwrittenMathAnswer({
     if (!containerRef.current || !latex) return;
     
     try {
+      const cleanLatex = sanitizeLatex(latex);
       // Render with KaTeX
-      const html = katex.renderToString(latex, {
+      const html = katex.renderToString(cleanLatex, {
         throwOnError: false,
         displayMode: false,
         output: 'html',
@@ -176,4 +177,24 @@ function replaceSymbolsWithSVG(container, fontSize, color) {
     }
     parent.removeChild(node);
   });
+}
+
+// Remove stray unmatched braces/parentheses that sometimes leak from OCR or formatting
+function sanitizeLatex(src) {
+  if (!src) return '';
+  let s = String(src).trim();
+
+  // Quick fixes for common artifacts: extra closing braces/parentheses
+  // e.g., "sin(x)} + C" -> "sin(x) + C"
+  s = s.replace(/\)\}+/g, ')');
+  s = s.replace(/\}+\)+/g, ')');
+  s = s.replace(/\}+$/g, '');
+  s = s.replace(/\)+$/g, ')');
+
+  // Normalize + c -> + C for constants of integration (cosmetic)
+  s = s.replace(/\+\s*c\b/g, '+ C');
+
+  // Trim repeated spaces
+  s = s.replace(/\s{2,}/g, ' ');
+  return s;
 }

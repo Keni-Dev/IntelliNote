@@ -44,6 +44,7 @@ const captureCanvasRegion = (fabricCanvas, bounds, strokes, options = {}) => {
   }
 
   const padding = options.padding ?? 16;
+  const scale = options.scale ?? 1;
 
   // Bounds are in canvas coordinates (world space)
   const { minX, minY, maxX, maxY } = bounds;
@@ -119,18 +120,22 @@ const captureCanvasRegion = (fabricCanvas, bounds, strokes, options = {}) => {
     // Destination size in world pixels (unscaled back from screen)
     const dw = Math.max(1, Math.round(sWidth / (currentZoom * retina)));
     const dh = Math.max(1, Math.round(sHeight / (currentZoom * retina)));
+    
+    // Apply downsample scale for faster inference
+    const finalWidth = Math.max(1, Math.round(dw * scale));
+    const finalHeight = Math.max(1, Math.round(dh * scale));
 
     // If our temp canvas size doesn't match due to clamping, resize to match
-    if (tempCanvas.width !== dw || tempCanvas.height !== dh) {
-      tempCanvas.width = dw;
-      tempCanvas.height = dh;
+    if (tempCanvas.width !== finalWidth || tempCanvas.height !== finalHeight) {
+      tempCanvas.width = finalWidth;
+      tempCanvas.height = finalHeight;
       // reset background after resize
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, dw, dh);
+      ctx.fillRect(0, 0, finalWidth, finalHeight);
     }
 
-    // Finally, copy pixels and unscale to world size
-    ctx.drawImage(lowerCanvas, sx, sy, sWidth, sHeight, 0, 0, dw, dh);
+    // Finally, copy pixels and unscale to world size (with downsample applied)
+    ctx.drawImage(lowerCanvas, sx, sy, sWidth, sHeight, 0, 0, finalWidth, finalHeight);
 
     console.log('[LocalOCR] Screenshot crop:', {
       retina, vptZoom: currentZoom,
@@ -273,8 +278,9 @@ export const recognizeHandwriting = async (strokes, options = {}) => {
   if (options.fabricCanvas && options.bounds) {
     console.log('[LocalOCR] Using screenshot method (fast & accurate)');
     const renderingOptions = {
-      padding: options.rendering?.padding ?? 16,
-      lineWidth: options.rendering?.lineWidth ?? 3,
+      padding: options.rendering?.padding ?? 12,  // Reduced from 16
+      lineWidth: options.rendering?.lineWidth ?? 2.5,  // Reduced from 3
+      scale: 0.75,  // NEW: Downsample to 75% - TrOCR works well with lower res
     };
     
     rendered = captureCanvasRegion(options.fabricCanvas, options.bounds, strokes, renderingOptions);
@@ -284,7 +290,9 @@ export const recognizeHandwriting = async (strokes, options = {}) => {
   if (!rendered || !rendered.dataUrl) {
     console.log('[LocalOCR] Using stroke rendering method (fallback)');
     const renderingOptions = {
-      ...(options.rendering || { padding: 16, lineWidth: 3, scale: 1 }),
+      padding: options.rendering?.padding ?? 12,  // Reduced from 16
+      lineWidth: options.rendering?.lineWidth ?? 2.5,  // Reduced from 3
+      scale: 0.75,  // NEW: Downsample to 75%
       bounds: options.bounds
     };
     

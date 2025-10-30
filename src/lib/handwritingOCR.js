@@ -15,6 +15,7 @@ const clamp01 = (value) => Math.max(0, Math.min(1, value));
 const MIN_STROKE_POINTS = 3; // Skip strokes with fewer points
 const MAX_TOUCH_AREA = 10000; // Skip large palm/hand strokes (pixels²)
 const DEBOUNCE_DELAY = 1500; // Wait 1.5s after last stroke before recognizing
+const RECOGNITION_TIMEOUT = 3000; // 3 second timeout for recognition requests
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -169,7 +170,7 @@ export const recognizeEquationHybrid = async (strokes, options = {}) => {
         : recognizeWithOpenRouter;
       
       // Retry with exponential backoff on failure
-      remoteResult = await retryWithBackoff(async () => {
+      const recognitionPromise = retryWithBackoff(async () => {
         return await recognizer(filteredStrokes, {
           cache: getOCRCache(),
           cacheKey: signature,
@@ -178,6 +179,13 @@ export const recognizeEquationHybrid = async (strokes, options = {}) => {
           bounds: options.bounds, // Pass bounds for cropping
         });
       });
+      
+      // Add timeout to prevent hanging
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Recognition timeout')), RECOGNITION_TIMEOUT)
+      );
+      
+      remoteResult = await Promise.race([recognitionPromise, timeoutPromise]);
 
       if (remoteResult && !remoteResult.usedFallback && (remoteResult.latex || remoteResult.equation)) {
         equation = (remoteResult.latex || remoteResult.equation || '').trim();
@@ -194,7 +202,10 @@ export const recognizeEquationHybrid = async (strokes, options = {}) => {
       // Network or provider failure; stay local and record error
       error = cloudError;
       method = mode === 'cloud' ? 'cloud-error' : 'local-fallback';
-      console.error('[HandwritingOCR] Cloud recognition failed after retries:', cloudError);
+      const errorMessage = cloudError.message === 'Recognition timeout' 
+        ? 'Cloud recognition timed out, using local result'
+        : 'Cloud recognition failed after retries';
+      console.error(`[HandwritingOCR] ${errorMessage}:`, cloudError);
     }
   }
 

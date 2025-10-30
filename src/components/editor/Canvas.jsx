@@ -108,6 +108,16 @@ const Canvas = forwardRef(({
   const resizableBoxCallbackRef = useRef(null);
   const canvasJustLoadedRef = useRef(true);
   const userInteractedRef = useRef(false);
+  const processedStrokesRef = useRef(new Set()); // Track ignored and solved stroke signatures
+
+  // Helper to create a signature from strokes for tracking processed equations
+  const createStrokeSignature = useCallback((strokes) => {
+    if (!strokes || strokes.length === 0) return null;
+    return strokes
+      .map(s => s.id)
+      .sort()
+      .join('|');
+  }, []);
 
   const formatConfidenceText = (value) => {
     if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -514,6 +524,7 @@ const Canvas = forwardRef(({
 
     pendingHandwritingRef.current = {
       strokeIds: (handwritingSuggestion.strokes || []).map((stroke) => stroke.id),
+      strokes: handwritingSuggestion.strokes, // Keep reference to strokes for signature
       releaseHighlight: releaseHighlightRef.current,
       bounds: handwritingSuggestion.bounds || handwritingSuggestion.equals?.bounds,
     };
@@ -522,6 +533,15 @@ const Canvas = forwardRef(({
   }, [handwritingSuggestion, canvas, detectEquation]);
 
   const handleHandwritingDismiss = useCallback(() => {
+    // Track the strokes as "ignored" so we don't detect them again
+    if (handwritingSuggestion?.strokes) {
+      const signature = createStrokeSignature(handwritingSuggestion.strokes);
+      if (signature) {
+        processedStrokesRef.current.add(signature);
+        console.log('[Canvas] Ignored equation signature:', signature);
+      }
+    }
+    
     setHandwritingSuggestion(null);
     setHandwritingHighlight(null);
     if (releaseHighlightRef.current) {
@@ -529,7 +549,7 @@ const Canvas = forwardRef(({
       releaseHighlightRef.current = null;
     }
     pendingHandwritingRef.current = null;
-  }, []);
+  }, [handwritingSuggestion, createStrokeSignature]);
 
   const handleToggleHandwritingDebug = useCallback(() => {
     setHandwritingDebug((prev) => {
@@ -683,7 +703,7 @@ const Canvas = forwardRef(({
         return false;
       }
       
-      // Check intersection
+      // Check intersection - if any part of the stroke overlaps with bounds, include it
       const intersects = !(
         strokeBounds.maxX < bounds.minX ||
         strokeBounds.minX > bounds.maxX ||
@@ -703,6 +723,51 @@ const Canvas = forwardRef(({
     console.log('[ResizeBox] Total strokes in strokesRef:', allStrokes.length);
     console.log('[ResizeBox] Found', strokesInBounds.length, 'strokes in new bounds');
     
+    // Auto-expand the adjusted bounds to fully include all partially-overlapping strokes
+    let finalBounds = { ...adjustedBounds };
+    let expanded = false;
+    
+    strokesInBounds.forEach(stroke => {
+      const strokeBounds = stroke?.bounds || stroke?.features?.bounds;
+      if (!strokeBounds) return;
+      
+      // Expand to fully include this stroke
+      if (strokeBounds.minX < finalBounds.minX) {
+        finalBounds.minX = strokeBounds.minX;
+        expanded = true;
+      }
+      if (strokeBounds.maxX > finalBounds.maxX) {
+        finalBounds.maxX = strokeBounds.maxX;
+        expanded = true;
+      }
+      if (strokeBounds.minY < finalBounds.minY) {
+        finalBounds.minY = strokeBounds.minY;
+        expanded = true;
+      }
+      if (strokeBounds.maxY > finalBounds.maxY) {
+        finalBounds.maxY = strokeBounds.maxY;
+        expanded = true;
+      }
+    });
+    
+    if (expanded) {
+      // Add padding
+      const padding = 15;
+      finalBounds.minX -= padding;
+      finalBounds.minY -= padding;
+      finalBounds.maxX += padding;
+      finalBounds.maxY += padding;
+      
+      // Recalculate dimensions
+      finalBounds.width = finalBounds.maxX - finalBounds.minX;
+      finalBounds.height = finalBounds.maxY - finalBounds.minY;
+      finalBounds.centerX = (finalBounds.minX + finalBounds.maxX) / 2;
+      finalBounds.centerY = (finalBounds.minY + finalBounds.maxY) / 2;
+      
+      console.log('[ResizeBox] Auto-expanded to fully include all strokes');
+      console.log('[ResizeBox] Final bounds:', finalBounds);
+    }
+    
     // Debug: log first few strokes to see their bounds
     if (strokesInBounds.length === 0 && allStrokes.length > 0) {
       console.log('[ResizeBox] Sample stroke bounds:', 
@@ -710,11 +775,11 @@ const Canvas = forwardRef(({
       );
     }
     
-    // Update the handwriting suggestion with new strokes and bounds
+    // Update the handwriting suggestion with new strokes and expanded bounds
     setHandwritingSuggestion(prev => ({
       ...prev,
       strokes: strokesInBounds,
-      bounds: adjustedBounds,
+      bounds: finalBounds,
     }));
     
     // Close the resizable box
@@ -740,6 +805,15 @@ const Canvas = forwardRef(({
         releaseHighlightRef.current = null;
       }
       return;
+    }
+
+    // Check if these strokes have already been processed (ignored or solved)
+    if (candidate.strokes) {
+      const signature = createStrokeSignature(candidate.strokes);
+      if (signature && processedStrokesRef.current.has(signature)) {
+        console.log('[Canvas] Skipping already processed strokes:', signature);
+        return;
+      }
     }
 
     // Show both equation-candidate (equals sign detected) and equation (recognized)
@@ -771,44 +845,47 @@ const Canvas = forwardRef(({
       let newMaxX = candidate.bounds.maxX;
       let newMaxY = candidate.bounds.maxY;
 
-      const expansionMargin = 20; // Pixel margin for detection
-      const padding = 10; // Extra padding after expansion
+      const horizontalMargin = 30; // Increased horizontal margin for detection
+      const verticalMargin = 50; // Significantly increased vertical margin for better capture
+      const padding = 15; // Extra padding after expansion
 
       candidate.strokes.forEach(stroke => {
         const strokeBounds = stroke?.bounds || stroke?.features?.bounds;
         if (!strokeBounds) return;
 
-        // Check if stroke intersects or is close to current bounds
-        const intersects = !(
-          strokeBounds.maxX < candidate.bounds.minX - expansionMargin ||
-          strokeBounds.minX > candidate.bounds.maxX + expansionMargin ||
-          strokeBounds.maxY < candidate.bounds.minY - expansionMargin ||
-          strokeBounds.minY > candidate.bounds.maxY + expansionMargin
+        // Check if stroke has ANY overlap with current bounds (including partial overlap)
+        // Using larger margins to catch nearby strokes
+        const hasOverlap = !(
+          strokeBounds.maxX < candidate.bounds.minX - horizontalMargin ||
+          strokeBounds.minX > candidate.bounds.maxX + horizontalMargin ||
+          strokeBounds.maxY < candidate.bounds.minY - verticalMargin ||
+          strokeBounds.minY > candidate.bounds.maxY + verticalMargin
         );
 
-        if (intersects) {
-          // Check for overflow and expand bounds
-          if (strokeBounds.minX < candidate.bounds.minX) {
-            newMinX = Math.min(newMinX, strokeBounds.minX);
+        if (hasOverlap) {
+          // Expand bounds to FULLY include this stroke
+          // This ensures if any part of a stroke touches the box, the entire stroke is included
+          if (strokeBounds.minX < newMinX) {
+            newMinX = strokeBounds.minX;
             needsExpansion = true;
           }
-          if (strokeBounds.maxX > candidate.bounds.maxX) {
-            newMaxX = Math.max(newMaxX, strokeBounds.maxX);
+          if (strokeBounds.maxX > newMaxX) {
+            newMaxX = strokeBounds.maxX;
             needsExpansion = true;
           }
-          if (strokeBounds.minY < candidate.bounds.minY) {
-            newMinY = Math.min(newMinY, strokeBounds.minY);
+          if (strokeBounds.minY < newMinY) {
+            newMinY = strokeBounds.minY;
             needsExpansion = true;
           }
-          if (strokeBounds.maxY > candidate.bounds.maxY) {
-            newMaxY = Math.max(newMaxY, strokeBounds.maxY);
+          if (strokeBounds.maxY > newMaxY) {
+            newMaxY = strokeBounds.maxY;
             needsExpansion = true;
           }
         }
       });
 
       if (needsExpansion) {
-        // Add padding
+        // Add padding around the fully expanded bounds
         newMinX -= padding;
         newMinY -= padding;
         newMaxX += padding;
@@ -832,12 +909,21 @@ const Canvas = forwardRef(({
         };
 
         console.log('[Canvas] Auto-expanded detection bounds to include all strokes');
+        console.log('[Canvas] Original bounds:', candidate.bounds);
+        console.log('[Canvas] Expanded bounds:', {
+          minX: newMinX,
+          minY: newMinY,
+          maxX: newMaxX,
+          maxY: newMaxY,
+          width: newMaxX - newMinX,
+          height: newMaxY - newMinY
+        });
       }
     }
 
     setHandwritingSuggestion(candidate);
     releaseHighlightRef.current = candidate.releaseHighlight || null;
-  }, []);
+  }, [createStrokeSignature]);
 
   // Notify parent of zoom changes without serializing full canvas (improves perf during interactions)
   useEffect(() => {
@@ -929,6 +1015,7 @@ const Canvas = forwardRef(({
   useEffect(() => {
     canvasJustLoadedRef.current = true;
     userInteractedRef.current = false;
+    processedStrokesRef.current.clear(); // Clear processed strokes for new note
   }, [noteId]);
 
   // Undo function (defined after canvas is available)
@@ -2017,8 +2104,24 @@ const Canvas = forwardRef(({
     setMathInputValue('');
     setMathInputAnalysis(null);
 
+    // Track the strokes as "solved" so we don't detect them again
     if (pendingHandwritingRef.current) {
-      const { releaseHighlight } = pendingHandwritingRef.current;
+      const { releaseHighlight, strokeIds } = pendingHandwritingRef.current;
+      
+      // Get strokes from IDs and create signature
+      if (strokeIds && strokeIds.length > 0) {
+        const allStrokes = strokesRef.current || [];
+        const solvedStrokes = strokeIds
+          .map(id => allStrokes.find(s => s?.id === id))
+          .filter(Boolean);
+        
+        const signature = createStrokeSignature(solvedStrokes);
+        if (signature) {
+          processedStrokesRef.current.add(signature);
+          console.log('[Canvas] Solved equation signature:', signature);
+        }
+      }
+      
       // Note: We no longer delete the handwriting strokes - they stay on the canvas
       if (typeof releaseHighlight === 'function') {
         releaseHighlight();
@@ -2026,23 +2129,44 @@ const Canvas = forwardRef(({
       pendingHandwritingRef.current = null;
       releaseHighlightRef.current = null;
     }
-  }, [canvas, mathInputPosition, detectEquation, getStoredVariables, solveWithContext, calculateConfidence, handwritingSuggestion]);
+  }, [canvas, mathInputPosition, detectEquation, getStoredVariables, solveWithContext, calculateConfidence, handwritingSuggestion, createStrokeSignature]);
 
   // Close math input without adding
   const handleMathInputClose = useCallback(() => {
-    setMathMode(false);
-    setMathInputValue('');
-    setMathInputAnalysis(null);
+    // Track the strokes as "ignored" if user closes without solving
     if (pendingHandwritingRef.current) {
+      const { strokes, strokeIds } = pendingHandwritingRef.current;
+      
+      // Try to get strokes from either direct reference or by IDs
+      let strokesToTrack = strokes;
+      if (!strokesToTrack && strokeIds && strokeIds.length > 0) {
+        const allStrokes = strokesRef.current || [];
+        strokesToTrack = strokeIds
+          .map(id => allStrokes.find(s => s?.id === id))
+          .filter(Boolean);
+      }
+      
+      if (strokesToTrack && strokesToTrack.length > 0) {
+        const signature = createStrokeSignature(strokesToTrack);
+        if (signature) {
+          processedStrokesRef.current.add(signature);
+          console.log('[Canvas] Ignored equation (closed without solving):', signature);
+        }
+      }
+      
       if (typeof pendingHandwritingRef.current.releaseHighlight === 'function') {
         pendingHandwritingRef.current.releaseHighlight();
       }
       pendingHandwritingRef.current = null;
     }
+    
+    setMathMode(false);
+    setMathInputValue('');
+    setMathInputAnalysis(null);
     releaseHighlightRef.current = null;
     setHandwritingSuggestion(null);
     setHandwritingHighlight(null);
-  }, []);
+  }, [createStrokeSignature]);
 
   const handleAskAndromeda = useCallback(async (solutionId) => {
     let targetEquation = '';

@@ -40,7 +40,7 @@ let credentialsState = {
   // OpenRouter
   openrouterApiKey: typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_OPENROUTER_API_KEY ?? '') : '',
 };
-const recognitionCache = new LRUCache(100); // LRU cache with 100 item capacity (reduced to avoid quota issues)
+const recognitionCache = new LRUCache(250); // LRU cache with 250 item capacity (increased for better hit rate)
 const recognitionHistory = [];
 
 const safeParse = (value) => {

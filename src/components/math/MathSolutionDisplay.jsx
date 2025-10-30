@@ -5,7 +5,6 @@ import { Copy, ChevronDown, ChevronUp, RefreshCw, Info, AlertCircle, Lightbulb, 
 import GlassCard from '../common/GlassCard';
 import GlassButton from '../common/GlassButton';
 import Toast from '../common/Toast';
-import HandwrittenMath from './HandwrittenMath';
 
 /**
  * Component to display equation solutions with step-by-step breakdown
@@ -147,6 +146,78 @@ export default function MathSolutionDisplay({
     if (onApplySuggestion) {
       onApplySuggestion(suggestion);
       setToast({ show: true, message: 'Suggestion applied', type: 'success' });
+    }
+  };
+
+  const getAnswerLatex = () => {
+    if (result == null) {
+      return '';
+    }
+
+    // Handle object results
+    if (typeof result === 'object') {
+      // For calculus results, the 'result' field contains the LaTeX answer
+      if (typeof result.result === 'string' && result.result) {
+        return result.result;
+      }
+      
+      // Try nested result object
+      if (typeof result.result === 'object' && result.result !== null) {
+        if (typeof result.result.result === 'string') {
+          return result.result.result;
+        }
+        if (result.result.value !== undefined) {
+          return formatResult(result.result.value);
+        }
+      }
+      
+      // Try explicit latex fields
+      if (typeof result.latex === 'string' && result.latex) {
+        return result.latex;
+      }
+      if (typeof result.latex_result === 'string' && result.latex_result) {
+        return result.latex_result;
+      }
+      
+      // Try value field
+      if (result.value !== undefined) {
+        return formatResult(result.value);
+      }
+      
+      // Try expression field
+      if (typeof result.expression === 'string' && result.expression) {
+        return result.expression;
+      }
+      
+      // Try solutions array
+      if (Array.isArray(result.solutions) && result.solutions.length > 0) {
+        return result.solutions.map(s => String(s)).join(', ');
+      }
+    }
+
+    // Fallback to string conversion
+    return formatResult(result);
+  };
+
+  const renderAnswerMath = () => {
+    const answerLatex = getAnswerLatex();
+
+    if (!answerLatex) {
+      return <span className="text-sm text-blue-100/80">—</span>;
+    }
+
+    // Debug: log what we're trying to render
+    console.log('[MathSolutionDisplay] Rendering answer:', {
+      answerLatex,
+      resultType: typeof result,
+      result: result
+    });
+
+    try {
+      return <BlockMath math={answerLatex} />;
+    } catch (error) {
+      console.error('[MathSolutionDisplay] Failed to render answer latex:', error);
+      return <span className="font-mono text-sm">{answerLatex}</span>;
     }
   };
 
@@ -308,20 +379,8 @@ export default function MathSolutionDisplay({
           {/* Final Answer */}
           <div className="mb-3 p-3 bg-gradient-to-br from-yellow-400/30 to-orange-400/30 rounded-lg border border-yellow-300/50">
             <div className="text-xs text-blue-100 mb-2">Answer:</div>
-            <div className="text-2xl font-bold text-white">
-              {typeof result === 'object' && result.value !== undefined ? (
-                <HandwrittenMath 
-                  latex={formatResult(result.value)} 
-                  scale={1.5}
-                  color="#eab308"
-                />
-              ) : (
-                <HandwrittenMath 
-                  latex={formatResult(result)} 
-                  scale={1.5}
-                  color="#eab308"
-                />
-              )}
+            <div className="text-white text-lg font-semibold leading-tight">
+              {renderAnswerMath()}
             </div>
           </div>
 

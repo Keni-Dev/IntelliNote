@@ -98,7 +98,9 @@ export class LayoutEngine {
           const prev = elements[elements.length - 1];
           const script = this.layoutScript(child, prev, context);
           elements.push(script);
-          x += script.width;
+          // Only add the portion of script width that extends beyond the base
+          const scriptExtension = Math.max(0, (script.x + script.width) - (prev.x + prev.width));
+          x += scriptExtension;
         }
         continue;
       }
@@ -210,16 +212,9 @@ export class LayoutEngine {
    */
   layoutScript(scriptNode, baseLayout, context) {
     const scriptFontSize = context.fontSize * 0.6;
-    const offsetX = baseLayout.width - baseLayout.width * 0.1; // Slight overlap
-    
-    const script = this.layoutNode(
-      scriptNode.exponent || scriptNode.subscript,
-      {
-        ...context,
-        fontSize: scriptFontSize,
-        level: context.level + 1
-      }
-    );
+    // Position script AFTER the base element (to the right)
+    // Add small gap or slight overlap for natural handwriting look
+    const scriptX = baseLayout.x + baseLayout.width - (baseLayout.width * 0.05); // 5% overlap
     
     let offsetY;
     if (scriptNode.type === NodeTypes.SUPERSCRIPT) {
@@ -230,12 +225,32 @@ export class LayoutEngine {
       offsetY = context.fontSize * 0.3;
     }
     
+    const scriptY = baseLayout.y + offsetY;
+    
+    // Layout the script with the correct position
+    const script = this.layoutNode(
+      scriptNode.exponent || scriptNode.subscript,
+      {
+        ...context,
+        x: scriptX,
+        y: scriptY,
+        fontSize: scriptFontSize,
+        level: context.level + 1
+      }
+    );
+    
+    // Calculate total width accounting for script extension
+    const totalWidth = Math.max(
+      baseLayout.width,
+      (script.x - baseLayout.x) + script.width
+    );
+    
     return {
       type: scriptNode.type,
-      x: baseLayout.x + offsetX,
-      y: baseLayout.y + offsetY,
-      width: script.width,
-      height: script.height,
+      x: baseLayout.x,
+      y: baseLayout.y,
+      width: totalWidth,
+      height: Math.max(baseLayout.height, script.height + Math.abs(offsetY)),
       baseline: script.baseline,
       script
     };
