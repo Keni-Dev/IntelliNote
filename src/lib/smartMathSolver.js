@@ -93,18 +93,45 @@ export async function solveMathEquation(equation, noteType = NOTE_TYPES.AUTO) {
       })
     });
 
+    const result = await response.json();
+    
+    // Check if the response contains an error (even with 200 status)
+    if (result.error || result.message) {
+      return {
+        success: false,
+        error: result.error || 'Unknown error',
+        message: result.message || result.user_message || result.error,
+        user_message: result.message || result.user_message,
+        suggestion: result.suggestion,
+        hint: result.hint,
+        error_type: result.error_type || 'general',
+        original: result.original
+      };
+    }
+    
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to solve equation');
+      return {
+        success: false,
+        error: result.detail || 'Failed to solve equation',
+        message: result.detail || 'Failed to solve equation',
+        user_message: `⚠️ ${result.detail || 'Failed to solve equation'}`,
+        error_type: 'server_error'
+      };
     }
 
-    const result = await response.json();
     return result;
   } catch (error) {
     console.error('Math solver error:', error);
+    
+    // Network or connection error
     return {
       success: false,
       error: error.message,
+      message: 'Failed to connect to math solver',
+      user_message: '⚠️ Failed to connect to math solver. Make sure the Python server is running.',
+      suggestion: 'Start the server with: python server/ocr_service_fast.py',
+      hint: 'Check that the server is running on http://localhost:8000',
+      error_type: 'connection_error',
       classification: null,
       result: null,
       explanation: `Failed to solve: ${error.message}`

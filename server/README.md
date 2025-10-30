@@ -28,7 +28,8 @@ Local FastAPI server providing handwritten math equation recognition using TrOCR
 
 cd server```powershell
 
-pip install -r requirements.txt# From repo root
+# From repo root
+pip install -r requirements.txt
 
 ```cd server
 

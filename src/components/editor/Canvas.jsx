@@ -17,7 +17,8 @@ import HandwritingDetector from './HandwritingDetector';
 import ResizableDetectionBox from './ResizableDetectionBox';
 import GlassModal from '../common/GlassModal';
 import OCRDebugPreview from '../common/OCRDebugPreview';
-import { MathInput, MathSolutionDisplay, VariablePanel, OCRSettings } from '../math';
+import Toast from '../common/Toast';
+import { MathInput, MathSolutionDisplay, VariablePanel, OCRSettings, MathErrorDisplay } from '../math';
 
 const Canvas = forwardRef(({
   noteId,
@@ -41,6 +42,9 @@ const Canvas = forwardRef(({
   const [mathInputAnalysis, setMathInputAnalysis] = useState(null);
   const mathInputRef = useRef(null);
   const canvasHostRef = useRef(null);
+  
+  // Math error state
+  const [currentError, setCurrentError] = useState(null);
   
   // Math solver state
   const [mathSolutions, setMathSolutions] = useState([]); // Array of { equation, result, position }
@@ -1748,6 +1752,23 @@ const Canvas = forwardRef(({
       // Solve with context awareness (now async to support smart solver)
       const result = await solveWithContext(normalized, spatialContext);
       
+      // Check for errors from the solver
+      if (!result.success || result.error) {
+        console.log('[Canvas] Math solver error:', result);
+        
+        // Set error state for display
+        setCurrentError({
+          message: result.message || result.user_message || result.error || 'Failed to solve equation',
+          suggestion: result.suggestion,
+          hint: result.hint,
+          error: result.error,
+          error_type: result.error_type,
+          original: normalized
+        });
+        
+        return; // Don't try to render solution
+      }
+      
       if (result.success && result.result !== undefined && result.result !== null) {
         // Render solution as handwritten-style text beside the equation strokes
         const bounds = pendingHandwritingRef.current?.bounds || handwritingSuggestion?.bounds;
@@ -3166,6 +3187,19 @@ const Canvas = forwardRef(({
             OCR Settings
           </button>
         </div>
+      )}
+
+      {/* Math Error Display - Fixed at top center, always visible when error exists */}
+      {currentError && (
+        <MathErrorDisplay 
+          error={currentError}
+          onDismiss={() => setCurrentError(null)}
+          onApplySuggestion={(fix) => {
+            console.log('[Canvas] Auto-fix suggestion:', fix);
+            // TODO: Implement auto-fix application
+            setCurrentError(null);
+          }}
+        />
       )}
 
       {/* Math Solution Displays */}

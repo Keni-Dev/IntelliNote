@@ -10,3 +10,4 @@ export { default as SolvePrompt } from './SolvePrompt';
 export { default as RecognitionResult } from './RecognitionResult';
 export { default as CorrectionModal } from './CorrectionModal';
 export { default as SymbolCorrector } from './SymbolCorrector';
+export { default as MathErrorDisplay } from './MathErrorDisplay';

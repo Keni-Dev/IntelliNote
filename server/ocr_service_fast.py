@@ -398,7 +398,14 @@ async def solve_math(req: SolveMathBody):
             'classification': result.get('classification'),
             'result': result.get('result'),
             'explanation': result.get('explanation'),
-            'error': result.get('error')
+            'error': result.get('error'),
+            # Include error details for frontend display
+            'message': result.get('message'),
+            'user_message': result.get('user_message'),
+            'suggestion': result.get('suggestion'),
+            'hint': result.get('hint'),
+            'error_type': result.get('error_type'),
+            'original': result.get('original')
         }
         
     except Exception as e:
