@@ -219,8 +219,11 @@ export function useMathSolver(noteId) {
   /**
    * Solve with spatial context using the same engine instance
    * Falls back to smart math solver if local engine fails
+   * @param {string} equation - The equation to solve
+   * @param {Object} context - Spatial context from nearby equations
+   * @param {string} noteType - Optional note type hint for smart solver ('auto', 'algebra', 'calculus', etc.)
    */
-  const solveWithContext = useCallback(async (equation, context = {}) => {
+  const solveWithContext = useCallback(async (equation, context = {}, noteType = 'auto') => {
     if (!engine) {
       return { success: false, error: 'Math engine not initialized' };
     }
@@ -241,7 +244,7 @@ export function useMathSolver(noteId) {
       console.log('[MathSolver] Local engine failed, trying smart math solver...');
       
       const { solveMathEquation } = await import('../lib/smartMathSolver');
-      const smartResult = await solveMathEquation(equation, 'auto');
+      const smartResult = await solveMathEquation(equation, noteType);
       
       if (smartResult.success && smartResult.result) {
         // Get solutions array
@@ -427,7 +430,7 @@ ${target}`,
    * Delete a variable
    */
   const deleteVariable = useCallback((name) => {
-    if (!engine) return;
+    if (!engine) return { success: false, error: 'Math engine not initialized' };
 
     const newVariables = { ...variables };
     delete newVariables[name];
@@ -443,14 +446,18 @@ ${target}`,
     
     setEngine(newEngine);
     setVariables(newVariables);
-    saveContext();
+    
+    // Save context asynchronously
+    setTimeout(() => saveContext(), 0);
+    
+    return { success: true };
   }, [engine, variables, formulas, saveContext]);
 
   /**
    * Delete a formula
    */
   const deleteFormula = useCallback((name) => {
-    if (!engine) return;
+    if (!engine) return { success: false, error: 'Math engine not initialized' };
 
     const newFormulas = { ...formulas };
     delete newFormulas[name];
@@ -466,7 +473,11 @@ ${target}`,
     
     setEngine(newEngine);
     setFormulas(newFormulas);
-    saveContext();
+    
+    // Save context asynchronously
+    setTimeout(() => saveContext(), 0);
+    
+    return { success: true };
   }, [engine, variables, formulas, saveContext]);
 
   /**

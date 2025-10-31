@@ -377,14 +377,13 @@ export default function VariablePanel({
       </div>
 
       {/* Confirm Dialog */}
-      {confirmDialog.show && (
-        <ConfirmDialog
-          title={confirmDialog.title}
-          message={confirmDialog.message}
-          onConfirm={confirmDialog.action}
-          onCancel={() => setConfirmDialog({ show: false, action: null, title: '', message: '' })}
-        />
-      )}
+      <ConfirmDialog
+        isOpen={confirmDialog.show}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        onConfirm={confirmDialog.action}
+        onClose={() => setConfirmDialog({ show: false, action: null, title: '', message: '' })}
+      />
 
       {/* Toast Notifications */}
       <Toast

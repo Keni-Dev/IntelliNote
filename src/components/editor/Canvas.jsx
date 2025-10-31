@@ -18,10 +18,19 @@ import ResizableDetectionBox from './ResizableDetectionBox';
 import GlassModal from '../common/GlassModal';
 import OCRDebugPreview from '../common/OCRDebugPreview';
 import Toast from '../common/Toast';
-import { MathInput, MathSolutionDisplay, VariablePanel, OCRSettings, MathErrorDisplay } from '../math';
+import { 
+  MathInput, 
+  MathSolutionDisplay, 
+  VariablePanel, 
+  OCRSettings, 
+  MathErrorDisplay,
+  VariableTooltip,
+  FormulaTooltip
+} from '../math';
 
 const Canvas = forwardRef(({
   noteId,
+  noteType = 'auto',
   initialCanvasData,
   onCanvasChange,
   onDrawingStateChange,
@@ -113,6 +122,11 @@ const Canvas = forwardRef(({
   const canvasJustLoadedRef = useRef(true);
   const userInteractedRef = useRef(false);
   const processedStrokesRef = useRef(new Set()); // Track ignored and solved stroke signatures
+  
+  // Math prompts state
+  const [variablePromptData, setVariablePromptData] = useState(null);
+  const [formulaPromptData, setFormulaPromptData] = useState(null);
+  const [toastMessage, setToastMessage] = useState(null);
 
   // Helper to create a signature from strokes for tracking processed equations
   const createStrokeSignature = useCallback((strokes) => {
@@ -500,7 +514,7 @@ const Canvas = forwardRef(({
     });
   }, [canvas, handwritingSuggestion, zoom, panX, panY]);
 
-  const handleHandwritingAccept = useCallback(() => {
+  const handleHandwritingAccept = useCallback(async () => {
     if (!handwritingSuggestion || !canvas) {
       return;
     }
@@ -510,6 +524,59 @@ const Canvas = forwardRef(({
       return;
     }
 
+    const suggestionValue = handwritingSuggestion.latex || handwritingSuggestion.equation || '';
+    
+    // Quick check: Detect if this is a simple assignment or formula definition
+    // Assignments: x = 5, V_0 = 10, etc.
+    // Formulas: F = ma, V_t = V_0 + at, etc.
+    const analysis = handwritingSuggestion.analysis || (suggestionValue ? detectEquation(suggestionValue) : null);
+    
+    // Try to solve quickly to determine type
+    const spatialContext = buildContextFromArea(
+      null,
+      canvas,
+      { x: bounds.centerX, y: bounds.centerY },
+      300
+    );
+    
+    const quickResult = await solveWithContext(suggestionValue, spatialContext, noteType);
+    
+    // If it's an assignment or formula, show tooltip directly
+    if (quickResult.type === 'assignment' || quickResult.type === 'formula_storage') {
+      // Store pending strokes for later use
+      pendingHandwritingRef.current = {
+        strokeIds: (handwritingSuggestion.strokes || []).map((stroke) => stroke.id),
+        strokes: handwritingSuggestion.strokes,
+        releaseHighlight: releaseHighlightRef.current,
+        bounds: handwritingSuggestion.bounds || handwritingSuggestion.equals?.bounds,
+      };
+      
+      // Store canvas coordinates - the tooltip components will handle screen conversion
+      if (quickResult.type === 'assignment') {
+        setVariablePromptData({
+          variableName: quickResult.variable,
+          value: quickResult.result,
+          equation: suggestionValue,
+          position: { x: bounds.maxX, y: bounds.centerY },
+          bounds: bounds
+        });
+      } else if (quickResult.type === 'formula_storage') {
+        setFormulaPromptData({
+          formulaName: quickResult.variable,
+          expression: quickResult.formula,
+          variables: quickResult.missingVariables || [],
+          equation: suggestionValue,
+          position: { x: bounds.maxX, y: bounds.centerY },
+          bounds: bounds
+        });
+      }
+      
+      setHandwritingSuggestion(null);
+      setHandwritingHighlight(null);
+      return;
+    }
+    
+    // Otherwise, use the normal flow (show MathInput for equations that need solving)
     const viewportTransform = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
     const anchor = new fabric.Point(bounds.minX, Math.max(bounds.minY - 40, bounds.minY));
     const transformed = fabric.util.transformPoint(anchor, viewportTransform);
@@ -520,9 +587,8 @@ const Canvas = forwardRef(({
       x,
       y,
     });
-    const suggestionValue = handwritingSuggestion.latex || handwritingSuggestion.equation || '';
     setMathInputValue(suggestionValue);
-    setMathInputAnalysis(handwritingSuggestion.analysis || (suggestionValue ? detectEquation(suggestionValue) : null));
+    setMathInputAnalysis(analysis);
     setMathMode(true);
     setHandwritingHighlight(null);
 
@@ -534,7 +600,7 @@ const Canvas = forwardRef(({
     };
 
     setHandwritingSuggestion(null);
-  }, [handwritingSuggestion, canvas, detectEquation]);
+  }, [handwritingSuggestion, canvas, detectEquation, solveWithContext, noteType]);
 
   const handleHandwritingDismiss = useCallback(() => {
     // Track the strokes as "ignored" so we don't detect them again
@@ -612,6 +678,97 @@ const Canvas = forwardRef(({
     };
   }, [handwritingSuggestion]);
 
+  // Normalize equation for implicit multiplication and other transformations
+  const normalizeEquation = useCallback((input) => {
+    let s = String(input);
+    
+    // Skip normalization entirely if the input contains LaTeX commands
+    // LaTeX commands start with backslash (e.g., \frac, \sqrt, \sum)
+    if (/\\[a-zA-Z]+/.test(s)) {
+      console.log('[normalizeEquation] Skipping normalization - LaTeX detected:', s);
+      return s;
+    }
+    
+    // IMPLICIT MULTIPLICATION: Handle cases like "ma" → "m*a", "2x" → "2*x"
+    // But be very conservative to avoid breaking things
+    
+    // Known multi-letter terms that should NOT be split
+    const knownTerms = [
+      'sin', 'cos', 'tan', 'sec', 'csc', 'cot',
+      'sinh', 'cosh', 'tanh',
+      'log', 'ln', 'exp', 
+      'sqrt', 'abs',
+      'derivative', 'integrate', 'diff',
+      'asin', 'acos', 'atan',
+      'pi', 'e'
+    ];
+    
+    // Only apply implicit multiplication for simple cases:
+    // 1. Single letter followed by single letter (not part of known function)
+    // 2. Number followed by letter
+    
+    // Match: single letter + single letter (e.g., "ma" → "m*a", but not "sin" or "cos")
+    s = s.replace(/\b([a-zA-Z])([a-zA-Z])\b/g, (match, p1, p2, offset) => {
+      // Check if this is part of a known function
+      const beforeMatch = s.slice(Math.max(0, offset - 10), offset);
+      const afterMatch = s.slice(offset, Math.min(s.length, offset + 10));
+      const context = beforeMatch + match + afterMatch;
+      
+      if (knownTerms.some(term => context.includes(term))) {
+        return match;
+      }
+      
+      return p1 + '*' + p2;
+    });
+    
+    // Match: number followed by letter (2x → 2*x)
+    s = s.replace(/(\d)([a-zA-Z])\b/g, '$1*$2');
+    
+    // Match: closing paren followed by letter or number ()x → ()*x, ()2 → ()*2
+    s = s.replace(/\)(\d|[a-zA-Z])/g, ')*$1');
+    
+    // Match: letter or number followed by opening paren x( → x*(, 2( → 2*(
+    // But NOT for known functions
+    s = s.replace(/([a-zA-Z]\d*)\(/g, (match, p1) => {
+      if (knownTerms.includes(p1.toLowerCase())) {
+        return match;
+      }
+      return p1 + '*(';
+    });
+    
+    // Replace integral symbol with integrate(
+    s = s.replace(/\u222B\s*\(/g, 'integrate(');
+
+    // Handle d/dx(<expr>) → derivative(<expr>, x)
+    const ddPattern = /\bd\/d([a-zA-Z])\s*\(/g;
+    let match;
+    let result = '';
+    let lastIndex = 0;
+    while ((match = ddPattern.exec(s)) !== null) {
+      const varName = match[1];
+      const openIndex = ddPattern.lastIndex - 1;
+      let depth = 0;
+      let i = openIndex;
+      for (; i < s.length; i++) {
+        const ch = s[i];
+        if (ch === '(') depth++;
+        else if (ch === ')') {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      if (depth !== 0) continue;
+      const exprInside = s.slice(openIndex + 1, i);
+      result += s.slice(lastIndex, match.index) + `derivative(${exprInside}, ${varName})`;
+      lastIndex = i + 1;
+    }
+    if (lastIndex > 0) {
+      s = result + s.slice(lastIndex);
+    }
+
+    return s;
+  }, []);
+
   const handleRecognizeEquation = useCallback(async () => {
     if (!handwritingSuggestion || !canvas) return;
     
@@ -660,7 +817,69 @@ const Canvas = forwardRef(({
       const equation = (result.equation || result.latex || '').trim();
       const analysis = analyzeMathContent(equation);
       
-      // Update suggestion with OCR result
+      console.log('[RecognizeEquation] OCR result:', equation);
+      
+      // Normalize equation for implicit multiplication
+      const normalizedEquation = normalizeEquation(equation);
+      console.log('[RecognizeEquation] Normalized:', normalizedEquation);
+      
+      // AUTO-DETECT assignments and formulas after OCR completes
+      // Only for DIRECT assignments/formulas, not solved equations
+      if (normalizedEquation && bounds) {
+        const spatialContext = buildContextFromArea(
+          null,
+          canvas,
+          { x: bounds.centerX, y: bounds.centerY },
+          300
+        );
+        
+        console.log('[RecognizeEquation] Checking if assignment/formula...');
+        const quickResult = await solveWithContext(normalizedEquation, spatialContext, noteType);
+        console.log('[RecognizeEquation] Quick result:', quickResult);
+        
+        // Check if it's a DIRECT assignment (simple form: variable = value)
+        // Not a complex equation like 2x+5=15
+        const isDirectAssignment = quickResult.type === 'assignment' && /^[a-zA-Z_]\w*\s*=\s*[^=]+$/.test(normalizedEquation.trim());
+        const isDirectFormula = quickResult.type === 'formula_storage';
+        
+        // If it's a direct assignment or formula, show tooltip directly (skip suggestion card)
+        if (isDirectAssignment || isDirectFormula) {
+          console.log('[RecognizeEquation] Auto-detected direct assignment/formula, showing tooltip directly');
+          
+          // Store pending strokes for later use
+          pendingHandwritingRef.current = {
+            strokeIds: (handwritingSuggestion.strokes || []).map((stroke) => stroke.id),
+            strokes: handwritingSuggestion.strokes,
+            releaseHighlight: releaseHighlightRef.current,
+            bounds: bounds,
+          };
+          
+          if (isDirectAssignment) {
+            setVariablePromptData({
+              variableName: quickResult.variable,
+              value: quickResult.result,
+              equation: normalizedEquation,
+              position: { x: bounds.maxX, y: bounds.centerY },
+              bounds: bounds
+            });
+          } else if (isDirectFormula) {
+            setFormulaPromptData({
+              formulaName: quickResult.variable,
+              expression: quickResult.formula,
+              variables: quickResult.missingVariables || [],
+              equation: normalizedEquation,
+              position: { x: bounds.maxX, y: bounds.centerY },
+              bounds: bounds
+            });
+          }
+          
+          // Clear the suggestion to prevent showing the card
+          setHandwritingSuggestion(null);
+          return;
+        }
+      }
+      
+      // Update suggestion with OCR result (for regular equations)
       setHandwritingSuggestion(prev => ({
         ...prev,
         equation,
@@ -683,7 +902,7 @@ const Canvas = forwardRef(({
         error: error.message || 'Recognition failed'
       }));
     }
-  }, [handwritingSuggestion, canvas]);
+  }, [handwritingSuggestion, canvas, noteType, solveWithContext, normalizeEquation]);
 
   const handleCancelResizableBox = useCallback(() => {
     setShowResizableBox(false);
@@ -795,7 +1014,7 @@ const Canvas = forwardRef(({
   }, [canvas, handwritingSuggestion]);
 
   // Handle handwriting candidate from HandwritingDetector
-  const handleHandwritingCandidate = useCallback((candidate) => {
+  const handleHandwritingCandidate = useCallback(async (candidate) => {
     // Don't show automatic detection on initial load
     if (canvasJustLoadedRef.current && !userInteractedRef.current) {
       return;
@@ -925,6 +1144,8 @@ const Canvas = forwardRef(({
       }
     }
 
+    // For all equations (including assignments), show the suggestion card first
+    // The auto-detection will happen in handleRecognizeEquation after OCR completes
     setHandwritingSuggestion(candidate);
     releaseHighlightRef.current = candidate.releaseHighlight || null;
   }, [createStrokeSignature]);
@@ -1690,50 +1911,8 @@ const Canvas = forwardRef(({
       return;
     }
 
-    // Normalize calculus shorthand (d/dx(expr)) and integral symbol ∫(expr, x, a, b)
-    const normalizeCalculusInput = (input) => {
-      let s = String(input);
-      // Replace integral symbol with integrate(
-      s = s.replace(/\u222B\s*\(/g, 'integrate(');
-
-      // Handle d/dx(<expr>) → derivative(<expr>, x)
-      const ddPattern = /\bd\/d([a-zA-Z])\s*\(/g;
-      let match;
-      let result = '';
-      let lastIndex = 0;
-      while ((match = ddPattern.exec(s)) !== null) {
-        const varName = match[1];
-        const openIndex = ddPattern.lastIndex - 1; // points at '('
-        // Find matching closing parenthesis for the expression
-        let depth = 0;
-        let i = openIndex;
-        for (; i < s.length; i++) {
-          const ch = s[i];
-          if (ch === '(') depth++;
-          else if (ch === ')') {
-            depth--;
-            if (depth === 0) {
-              break;
-            }
-          }
-        }
-        if (depth !== 0) {
-          // Unbalanced parentheses, stop processing
-          continue;
-        }
-        const exprInside = s.slice(openIndex + 1, i);
-        // Append preceding text and replacement
-        result += s.slice(lastIndex, match.index) + `derivative(${exprInside}, ${varName})`;
-        lastIndex = i + 1;
-      }
-      if (lastIndex > 0) {
-        s = result + s.slice(lastIndex);
-      }
-
-      return s;
-    };
-
-    const normalized = normalizeCalculusInput(finalValue);
+    // Use shared normalization function
+    const normalized = normalizeEquation(finalValue);
 
     const analysis = providedAnalysis ?? detectEquation(normalized);
     const isCalculusExpression = /\b(integrate|derivative|diff)\s*\(|\u222B|\bd\/d[a-zA-Z]\b/.test(normalized);
@@ -1749,26 +1928,63 @@ const Canvas = forwardRef(({
         300 // 300px radius
       );
       
-      // Solve with context awareness (now async to support smart solver)
-      const result = await solveWithContext(normalized, spatialContext);
+      // Solve with context awareness (now async to support smart solver, pass noteType)
+      const result = await solveWithContext(normalized, spatialContext, noteType);
       
       // Check for errors from the solver
       if (!result.success || result.error) {
         console.log('[Canvas] Math solver error:', result);
         
-        // Set error state for display
+        // Pass the entire result object to preserve all Python server fields
+        // The result already contains: error, user_message, suggestion, hint, error_type
         setCurrentError({
-          message: result.message || result.user_message || result.error || 'Failed to solve equation',
-          suggestion: result.suggestion,
-          hint: result.hint,
-          error: result.error,
-          error_type: result.error_type,
-          original: normalized
+          ...result,  // Spread all fields from Python server
+          original: normalized  // Add the original equation
         });
         
         return; // Don't try to render solution
       }
       
+      // Route based on result type
+      // Only show assignment/formula tooltips for DIRECT assignments/formulas
+      // Not for solved equations (e.g., 2x+5=15 → x=5 should show solution, not assignment tooltip)
+      const isDirectAssignment = result.type === 'assignment' && /^[a-zA-Z_]\w*\s*=\s*[^=]+$/.test(normalized.trim());
+      const isDirectFormula = result.type === 'formula_storage';
+      
+      if (isDirectAssignment) {
+        // Direct variable assignment (e.g., x = 5, V_0 = 10)
+        console.log('[Canvas] Direct variable assignment detected:', result);
+        
+        const bounds = pendingHandwritingRef.current?.bounds || handwritingSuggestion?.bounds;
+        
+        // Store canvas coordinates - the tooltip components will handle screen conversion
+        setVariablePromptData({
+          variableName: result.variable,
+          value: result.result,
+          equation: normalized,
+          position: { x: bounds?.maxX || mathInputPosition.x, y: bounds?.centerY || mathInputPosition.y },
+          bounds: bounds
+        });
+        return;
+      } else if (isDirectFormula) {
+        // Formula definition detected (e.g., F = ma, V_t = V_o + at)
+        console.log('[Canvas] Formula definition detected:', result);
+        
+        const bounds = pendingHandwritingRef.current?.bounds || handwritingSuggestion?.bounds;
+        
+        // Store canvas coordinates - the tooltip components will handle screen conversion
+        setFormulaPromptData({
+          formulaName: result.variable,
+          expression: result.formula,
+          variables: result.missingVariables || [],
+          equation: normalized,
+          position: { x: bounds?.maxX || mathInputPosition.x, y: bounds?.centerY || mathInputPosition.y },
+          bounds: bounds
+        });
+        return;
+      }
+      
+      // Otherwise, proceed with normal solution display
       if (result.success && result.result !== undefined && result.result !== null) {
         // Render solution as handwritten-style text beside the equation strokes
         const bounds = pendingHandwritingRef.current?.bounds || handwritingSuggestion?.bounds;
@@ -2150,7 +2366,7 @@ const Canvas = forwardRef(({
       pendingHandwritingRef.current = null;
       releaseHighlightRef.current = null;
     }
-  }, [canvas, mathInputPosition, detectEquation, getStoredVariables, solveWithContext, calculateConfidence, handwritingSuggestion, createStrokeSignature]);
+  }, [canvas, mathInputPosition, detectEquation, getStoredVariables, solveWithContext, calculateConfidence, handwritingSuggestion, createStrokeSignature, noteType, normalizeEquation]);
 
   // Close math input without adding
   const handleMathInputClose = useCallback(() => {
@@ -2188,6 +2404,64 @@ const Canvas = forwardRef(({
     setHandwritingSuggestion(null);
     setHandwritingHighlight(null);
   }, [createStrokeSignature]);
+
+  // Handle adding variable from AddVariablePrompt
+  const handleAddVariable = useCallback((variableName, value) => {
+    console.log('[Canvas] Adding variable:', variableName, '=', value);
+    
+    // Add to MathEngine (don't display on canvas since user already wrote it)
+    const result = setVariable(variableName, value);
+    
+    if (result.success) {
+      // Show success toast
+      setToastMessage(`Variable ${variableName} added successfully!`);
+    }
+    
+    setVariablePromptData(null);
+    setHandwritingSuggestion(null);
+    pendingHandwritingRef.current = null;
+  }, [setVariable]);
+
+  // Handle adding formula from AddFormulaPrompt
+  const handleAddFormula = useCallback((formulaName, expression) => {
+    console.log('[Canvas] Adding formula:', formulaName, '=', expression);
+    
+    // Add to MathEngine (don't display on canvas since user already wrote it)
+    const result = defineFormula(formulaName, expression);
+    
+    if (result.success) {
+      // Show success toast
+      setToastMessage(`Formula ${formulaName} added successfully!`);
+    }
+    
+    setFormulaPromptData(null);
+    setHandwritingSuggestion(null);
+    pendingHandwritingRef.current = null;
+  }, [defineFormula]);
+
+  // Handle "just display" for variable
+  const handleJustDisplayVariable = useCallback(() => {
+    // Just dismiss the tooltip - the handwritten assignment is already on canvas
+    setVariablePromptData(null);
+    setHandwritingSuggestion(null);
+    pendingHandwritingRef.current = null;
+  }, []);
+
+  // Handle "just display" for formula
+  const handleJustDisplayFormula = useCallback(() => {
+    // Just dismiss the tooltip - the handwritten formula is already on canvas
+    setFormulaPromptData(null);
+    setHandwritingSuggestion(null);
+    pendingHandwritingRef.current = null;
+  }, []);
+
+  // Handle cancel for variable/formula prompts
+  const handleCancelPrompt = useCallback(() => {
+    setVariablePromptData(null);
+    setFormulaPromptData(null);
+    setHandwritingSuggestion(null);
+    pendingHandwritingRef.current = null;
+  }, []);
 
   const handleAskAndromeda = useCallback(async (solutionId) => {
     let targetEquation = '';
@@ -2247,7 +2521,7 @@ const Canvas = forwardRef(({
             300
           ) : {};
           
-          const result = solveWithContext(solution.equation, spatialContext);
+          const result = solveWithContext(solution.equation, spatialContext, noteType);
           const confidence = calculateConfidence(result, result.context);
           
           if (result.success || result.suggestions?.length > 0) {
@@ -2269,7 +2543,7 @@ const Canvas = forwardRef(({
         return solution;
       });
     });
-  }, [canvas, getStoredVariables, solveWithContext, calculateConfidence]);
+  }, [canvas, getStoredVariables, solveWithContext, calculateConfidence, noteType]);
 
   // Navigate to source object on canvas
   const handleNavigateToSource = useCallback((contextItem) => {
@@ -3309,6 +3583,45 @@ const Canvas = forwardRef(({
         imageData={handwritingSuggestion?.debugImage}
         debugInfo={handwritingSuggestion?.debugInfo}
       />
+
+      {/* Variable Assignment Tooltip */}
+      {variablePromptData && (
+        <VariableTooltip
+          variableName={variablePromptData.variableName}
+          value={variablePromptData.value}
+          position={variablePromptData.position}
+          bounds={variablePromptData.bounds}
+          zoom={zoom}
+          panOffset={panOffset}
+          onAddVariable={handleAddVariable}
+          onJustDisplay={handleJustDisplayVariable}
+          onCancel={handleCancelPrompt}
+        />
+      )}
+
+      {/* Formula Definition Tooltip */}
+      {formulaPromptData && (
+        <FormulaTooltip
+          formulaName={formulaPromptData.formulaName}
+          expression={formulaPromptData.expression}
+          variables={formulaPromptData.variables}
+          position={formulaPromptData.position}
+          bounds={formulaPromptData.bounds}
+          zoom={zoom}
+          panOffset={panOffset}
+          onAddFormula={handleAddFormula}
+          onJustDisplay={handleJustDisplayFormula}
+          onCancel={handleCancelPrompt}
+        />
+      )}
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <Toast
+          message={toastMessage}
+          onClose={() => setToastMessage(null)}
+        />
+      )}
     </div>
   );
 });
@@ -3317,6 +3630,7 @@ Canvas.displayName = 'Canvas';
 
 Canvas.propTypes = {
   noteId: PropTypes.string.isRequired,
+  noteType: PropTypes.string,
   canvasId: PropTypes.string,
   initialCanvasData: PropTypes.string,
   onCanvasChange: PropTypes.func,
@@ -3325,6 +3639,7 @@ Canvas.propTypes = {
 };
 
 Canvas.defaultProps = {
+  noteType: 'auto',
   canvasId: null,
   initialCanvasData: null,
   onCanvasChange: null,

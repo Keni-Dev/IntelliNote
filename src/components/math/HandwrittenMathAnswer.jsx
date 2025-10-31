@@ -58,7 +58,7 @@ export default function HandwrittenMathAnswer({
         fontSize: `${fontSize}px`,
         color: color,
         display: 'inline-block',
-        fontFamily: "'Gochi Hand', 'Kalam', 'Architects Daughter', cursive",
+        fontFamily: "'Architects Daughter', 'Gochi Hand', 'Kalam', cursive",
       }}
     />
   );
@@ -75,12 +75,12 @@ function applyHandwritingStyles(container, fontSize, color) {
   
   textElements.forEach(element => {
     // Set handwriting font
-    element.style.fontFamily = "'Gochi Hand', 'Kalam', 'Architects Daughter', cursive";
+    element.style.fontFamily = "'Architects Daughter', 'Gochi Hand', 'Kalam', cursive";
     element.style.fontWeight = 'normal';
     
     // Add slight rotation for natural handwriting feel
     if (element.textContent && element.textContent.trim()) {
-      const rotation = (Math.random() - 0.5) * 0.6; // Random rotation between -0.3 and 0.3 degrees
+      const rotation = (Math.random() - 0.5) * 4; // Random rotation between -2 and 2 degrees
       element.style.transform = `rotate(${rotation}deg)`;
       element.style.display = 'inline-block';
     }

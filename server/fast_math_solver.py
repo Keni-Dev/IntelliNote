@@ -82,6 +82,7 @@ class FastMathSolver:
                         return {
                             'valid': False,
                             'error': f'Missing differential in integral',
+                            'error_type': 'missing_dx',
                             'suggestion': f'Did you mean to include "d{var_name}"?',
                             'hint': f'Example: ∫{cleaned} d{var_name}',
                             'user_message': f'⚠️ Your integral is missing a differential! Try adding "d{var_name}" at the end.'
@@ -92,6 +93,7 @@ class FastMathSolver:
                 return {
                     'valid': False,
                     'error': 'Missing differential in integral',
+                    'error_type': 'missing_dx',
                     'suggestion': 'Add dx, dy, dt, or another differential at the end',
                     'hint': 'Example: ∫x² dx  (note the "dx" at the end)',
                     'user_message': '⚠️ Your integral is missing a differential! Please add "dx" (or dy, dt, etc.) at the end.'
@@ -104,6 +106,7 @@ class FastMathSolver:
                     return {
                         'valid': False,
                         'error': 'Incomplete definite integral',
+                        'error_type': 'missing_limit_point',
                         'suggestion': 'Definite integrals need both lower and upper limits',
                         'hint': 'Example: ∫₀² x dx  or  \\int_{0}^{2} x dx',
                         'user_message': '⚠️ Your definite integral is missing limits! Include both lower and upper bounds like ∫₀² or ∫_{0}^{2}.'
@@ -118,6 +121,7 @@ class FastMathSolver:
                     return {
                         'valid': False,
                         'error': 'Missing variable in derivative notation',
+                        'error_type': 'missing_variable',
                         'suggestion': 'Specify which variable to differentiate with respect to',
                         'hint': 'Example: d/dx(x²) or d/dt(sin(t))',
                         'user_message': '⚠️ Your derivative notation is incomplete! Specify the variable like "d/dx" or "d/dt".'
@@ -129,6 +133,7 @@ class FastMathSolver:
                     return {
                         'valid': False,
                         'error': 'Incomplete derivative notation',
+                        'error_type': 'missing_variable',
                         'suggestion': 'Use proper derivative notation: \\frac{d}{dx}',
                         'hint': 'Example: \\frac{d}{dx}(x²)',
                         'user_message': '⚠️ Your derivative notation is incomplete! Use \\frac{d}{dx} or \\frac{d}{dt}.'
@@ -145,6 +150,7 @@ class FastMathSolver:
                 return {
                     'valid': False,
                     'error': 'Missing limit point',
+                    'error_type': 'missing_limit_point',
                     'suggestion': 'Specify what value the variable approaches',
                     'hint': 'Example: \\lim_{x\\to 0} or lim x→0',
                     'user_message': '⚠️ Your limit is missing a point! Specify where the variable approaches, like "x→0" or "x→∞".'
@@ -157,6 +163,7 @@ class FastMathSolver:
                 return {
                     'valid': False,
                     'error': 'Unbalanced parentheses',
+                    'error_type': 'unbalanced_parentheses',
                     'suggestion': 'Make sure all opening parentheses "(" have matching closing ")"',
                     'user_message': f'⚠️ Unbalanced parentheses! You have {equation.count("(")} opening but {equation.count(")")} closing.'
                 }
@@ -165,6 +172,7 @@ class FastMathSolver:
                 return {
                     'valid': False,
                     'error': 'Unbalanced braces',
+                    'error_type': 'unbalanced_braces',
                     'suggestion': 'Make sure all opening braces "{" have matching closing "}"',
                     'user_message': f'⚠️ Unbalanced braces! You have {equation.count("{")} opening but {equation.count("}")} closing.'
                 }
@@ -174,6 +182,7 @@ class FastMathSolver:
                 return {
                     'valid': False,
                     'error': 'Missing operand',
+                    'error_type': 'missing_operand',
                     'suggestion': 'Check that all operators (+, -, *, /, ^) have numbers or variables on both sides',
                     'user_message': '⚠️ Missing operand! Make sure operators like +, -, *, / have values on both sides.'
                 }
@@ -189,6 +198,7 @@ class FastMathSolver:
                     return {
                         'valid': False,
                         'error': 'Unmatched matrix environment',
+                        'error_type': 'unmatched_environment',
                         'suggestion': 'Every \\begin{matrix} needs a matching \\end{matrix}',
                         'user_message': '⚠️ Unmatched matrix environment! Make sure every \\begin{matrix} has an \\end{matrix}.'
                     }
@@ -199,6 +209,7 @@ class FastMathSolver:
             return {
                 'valid': False,
                 'error': 'Empty equation',
+                'error_type': 'empty_equation',
                 'user_message': '⚠️ Please enter an equation or expression to solve.'
             }
         
@@ -207,6 +218,7 @@ class FastMathSolver:
             return {
                 'valid': False,
                 'error': 'Multiple consecutive operators',
+                'error_type': 'multiple_operators',
                 'suggestion': 'Remove duplicate operators like "++", "**", etc.',
                 'user_message': '⚠️ Multiple consecutive operators detected! Check for typos like "++" or "**".'
             }
@@ -226,6 +238,7 @@ class FastMathSolver:
             return {
                 'valid': False,
                 'error': 'Unexpected characters',
+                'error_type': 'invalid_characters',
                 'suggestion': f'Found unexpected characters: {unexpected}',
                 'user_message': f'⚠️ Unexpected characters found: {unexpected}. Please use standard math notation.'
             }
@@ -251,7 +264,9 @@ class FastMathSolver:
                 return {
                     'success': False,
                     'error': validation['error'],
+                    'error_type': validation.get('error_type', 'validation_error'),
                     'message': validation.get('user_message', validation['error']),
+                    'user_message': validation.get('user_message', validation['error']),
                     'suggestion': validation.get('suggestion', ''),
                     'hint': validation.get('hint', ''),
                     'original': equation
@@ -375,9 +390,26 @@ class FastMathSolver:
             }
             
         except Exception as e:
+            error_msg = str(e)
+            # If it's a parsing/syntax error, provide user-friendly message
+            if 'syntax error' in error_msg.lower() or 'evaluation error' in error_msg.lower():
+                validation = self._validate_equation(equation, 'equation')
+                if not validation.get('valid', True):
+                    return {
+                        'success': False,
+                        'error': validation['error'],
+                        'error_type': validation.get('error_type', 'syntax_error'),
+                        'user_message': validation.get('user_message', validation['error']),
+                        'suggestion': validation.get('suggestion', ''),
+                        'hint': validation.get('hint', ''),
+                        'original': equation
+                    }
+            
             return {
                 'success': False,
-                'error': str(e),
+                'error': error_msg,
+                'error_type': 'parsing_error',
+                'user_message': f'Failed to parse equation: {error_msg}',
                 'original': equation
             }
     
@@ -662,7 +694,9 @@ class FastMathSolver:
                 return {
                     'success': False,
                     'error': validation['error'],
+                    'error_type': validation.get('error_type', 'validation_error'),
                     'message': validation.get('user_message', validation['error']),
+                    'user_message': validation.get('user_message', validation['error']),
                     'suggestion': validation.get('suggestion', ''),
                     'hint': validation.get('hint', ''),
                     'original': equation
@@ -987,7 +1021,31 @@ class FastMathSolver:
             return {'success': False, 'error': 'Could not identify calculus operation'}
             
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            error_msg = str(e)
+            # If it's a parsing/syntax error, return user-friendly message
+            # Check if it might be a validation issue that slipped through
+            if 'syntax error' in error_msg.lower() or 'evaluation error' in error_msg.lower():
+                # Re-run validation to get user-friendly error
+                validation = self._validate_equation(equation, 'integral')
+                if not validation.get('valid', True):
+                    return {
+                        'success': False,
+                        'error': validation['error'],
+                        'error_type': validation.get('error_type', 'syntax_error'),
+                        'user_message': validation.get('user_message', validation['error']),
+                        'suggestion': validation.get('suggestion', ''),
+                        'hint': validation.get('hint', ''),
+                        'original': equation
+                    }
+            
+            # Return generic parsing error
+            return {
+                'success': False,
+                'error': error_msg,
+                'error_type': 'parsing_error',
+                'user_message': f'Failed to parse equation: {error_msg}',
+                'original': equation
+            }
     
     def solve_physics(self, equation: str, problem_type: str = 'auto') -> Dict[str, Any]:
         """
@@ -1008,7 +1066,9 @@ class FastMathSolver:
                 return {
                     'success': False,
                     'error': validation['error'],
+                    'error_type': validation.get('error_type', 'validation_error'),
                     'message': validation.get('user_message', validation['error']),
+                    'user_message': validation.get('user_message', validation['error']),
                     'suggestion': validation.get('suggestion', ''),
                     'hint': validation.get('hint', ''),
                     'original': equation
@@ -1159,7 +1219,28 @@ class FastMathSolver:
             return {'success': False, 'error': 'Could not parse physics equation'}
             
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            error_msg = str(e)
+            # If it's a parsing/syntax error, provide user-friendly message
+            if 'syntax error' in error_msg.lower() or 'evaluation error' in error_msg.lower():
+                validation = self._validate_equation(equation, 'equation')
+                if not validation.get('valid', True):
+                    return {
+                        'success': False,
+                        'error': validation['error'],
+                        'error_type': validation.get('error_type', 'syntax_error'),
+                        'user_message': validation.get('user_message', validation['error']),
+                        'suggestion': validation.get('suggestion', ''),
+                        'hint': validation.get('hint', ''),
+                        'original': equation
+                    }
+            
+            return {
+                'success': False,
+                'error': error_msg,
+                'error_type': 'parsing_error',
+                'user_message': f'Failed to parse equation: {error_msg}',
+                'original': equation
+            }
     
     def solve_trigonometry(self, equation: str) -> Dict[str, Any]:
         """
@@ -1467,7 +1548,9 @@ class FastMathSolver:
                 return {
                     'success': False,
                     'error': validation['error'],
+                    'error_type': validation.get('error_type', 'validation_error'),
                     'message': validation.get('user_message', validation['error']),
+                    'user_message': validation.get('user_message', validation['error']),
                     'suggestion': validation.get('suggestion', ''),
                     'hint': validation.get('hint', ''),
                     'original': equation
@@ -1725,7 +1808,28 @@ class FastMathSolver:
             return {'success': False, 'error': 'Could not identify linear algebra operation'}
             
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            error_msg = str(e)
+            # If it's a parsing/syntax error, provide user-friendly message
+            if 'syntax error' in error_msg.lower() or 'evaluation error' in error_msg.lower():
+                validation = self._validate_equation(equation, 'matrix')
+                if not validation.get('valid', True):
+                    return {
+                        'success': False,
+                        'error': validation['error'],
+                        'error_type': validation.get('error_type', 'syntax_error'),
+                        'user_message': validation.get('user_message', validation['error']),
+                        'suggestion': validation.get('suggestion', ''),
+                        'hint': validation.get('hint', ''),
+                        'original': equation
+                    }
+            
+            return {
+                'success': False,
+                'error': error_msg,
+                'error_type': 'parsing_error',
+                'user_message': f'Failed to parse equation: {error_msg}',
+                'original': equation
+            }
     
     def _parse(self, expr_str: str):
         """Parse mathematical expression with custom local symbols"""

@@ -334,6 +334,7 @@ function Editor() {
         <Canvas
           ref={canvasRef}
           noteId={noteId}
+          noteType={note.noteType || 'auto'}
           initialCanvasData={note.canvasData}
           onCanvasChange={handleCanvasChange}
           onDrawingStateChange={handleDrawingStateChange}
